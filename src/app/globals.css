@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #17251d;
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-muted: #f4f7f4;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --green: #168348;
+  --pale: #eff8f1;
+}
+
+.dark {
+  --ink: #f1f5f9;
+  --bg: #090e0b;
+  --surface: #111a14;
+  --surface-muted: #16241b;
+  --muted: #94a3b8;
+  --line: #1e3325;
+  --green: #22c55e;
+  --pale: #132a1e;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-inter), Arial, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+h1, h2, h3, h4, .display {
+  font-family: var(--font-poppins), var(--font-inter), sans-serif;
+  letter-spacing: -0.04em;
+}
+
+button, input, textarea, select {
+  font: inherit;
+}
+
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: #c6e8cf;
+  color: #123b2b;
+}
+
+.dark ::selection {
+  background: #168348;
+  color: #ffffff;
+}
+
+.container {
+  width: min(1160px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 10px 32px rgba(18, 59, 43, 0.055);
+}
+
+.dark .card {
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.35);
+}
+
+.tint-mint { background: #e8f5e8; }
+.tint-butter { background: #fff5d9; }
+.tint-sky { background: #e8f3f7; }
+.tint-peach { background: #fff0e6; }
+.tint-lilac { background: #f1edfb; }
+.tint-rose { background: #fcecf0; }
+
+.dark .tint-mint { background: #132a1e; }
+.dark .tint-butter { background: #2a2311; }
+.dark .tint-sky { background: #12242e; }
+.dark .tint-peach { background: #2d1c13; }
+.dark .tint-lilac { background: #221a30; }
+.dark .tint-rose { background: #2e151b; }
+
+.avatar-sage { background: #e6efe1; }
+.avatar-sand { background: #f4e8d5; }
+.avatar-blue { background: #e3edf6; }
+
+.hero-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 0.8px, transparent 0.8px);
+  background-size: 20px 20px;
+}
+
+.bottom-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (max-width: 640px) {
+  .container {
+    width: calc(100% - 32px);
+  }
+}
