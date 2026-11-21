@@ -4,6 +4,8 @@ import { signInSchema } from '@/lib/validators/auth';
 import { createDemoSession, DEMO_COOKIE } from '@/lib/demo/session';
 import type { Database } from '@/lib/supabase/database.types';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   const input = signInSchema.safeParse(await req.json().catch(() => null));
   if (!input.success) {
@@ -57,6 +59,13 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: 60 * 60 * 24,
     });
+    response.cookies.set('karigar_session_type', 'demo', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 60 * 60 * 24,
+    });
 
     return response;
   }
@@ -95,8 +104,15 @@ export async function POST(req: NextRequest) {
     .eq('id', data.user.id)
     .single();
 
-  const role = (profile?.role as 'user' | 'provider' | 'admin') || 'user';
+  const role = (profile?.role as 'user' | 'provider' | 'admin') || (data.user.user_metadata?.role as 'user' | 'provider' | 'admin') || 'user';
   response.cookies.set(DEMO_COOKIE, await createDemoSession(role), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 60 * 60 * 24,
+  });
+  response.cookies.set('karigar_session_type', 'real', {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',

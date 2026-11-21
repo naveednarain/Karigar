@@ -168,6 +168,10 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
                 <button
                   onClick={async () => {
                     await fetch('/api/auth/signout', { method: 'POST' });
+                    try {
+                      const { createClient } = await import('@/lib/supabase/client');
+                      await createClient().auth.signOut();
+                    } catch {}
                     setCurrentUser(null);
                     setOpen(false);
                     window.location.href = `/${locale}`;
@@ -220,6 +224,10 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
               <button
                 onClick={async () => {
                   await fetch('/api/auth/signout', { method: 'POST' });
+                  try {
+                    const { createClient } = await import('@/lib/supabase/client');
+                    await createClient().auth.signOut();
+                  } catch {}
                   setCurrentUser(null);
                   window.location.href = `/${locale}`;
                 }}

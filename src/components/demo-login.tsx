@@ -79,10 +79,6 @@ export function DemoLogin({ nextPath }: { nextPath?: string }) {
       .then((d) => {
         if (d?.user) {
           setActiveSession(d.user);
-          // If already logged in and there's a target page to visit, forward immediately
-          if (effectiveNext && !effectiveNext.includes('/login')) {
-            window.location.href = effectiveNext;
-          }
         }
       })
       .catch(() => {});
@@ -231,13 +227,17 @@ export function DemoLogin({ nextPath }: { nextPath?: string }) {
 
                   <div className="flex items-center gap-2">
                     <Link
-                      href={`/${locale}/${
-                        activeSession.role === 'provider'
-                          ? 'provider/dashboard'
-                          : activeSession.role === 'admin'
-                          ? 'admin'
-                          : 'account/bookings'
-                      }`}
+                      href={
+                        effectiveNext && !effectiveNext.includes('/login')
+                          ? effectiveNext
+                          : `/${locale}/${
+                              activeSession.role === 'provider'
+                                ? 'provider/dashboard'
+                                : activeSession.role === 'admin'
+                                ? 'admin'
+                                : 'account/bookings'
+                            }`
+                      }
                       className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                     >
                       <span>Continue to {activeSession.role === 'provider' ? 'Workspace' : activeSession.role === 'admin' ? 'Console' : 'Bookings'}</span>
@@ -247,6 +247,10 @@ export function DemoLogin({ nextPath }: { nextPath?: string }) {
                       type="button"
                       onClick={async () => {
                         await fetch('/api/auth/signout', { method: 'POST' });
+                        try {
+                          const { createClient } = await import('@/lib/supabase/client');
+                          await createClient().auth.signOut();
+                        } catch {}
                         setActiveSession(null);
                         toast.success('Signed out.');
                       }}

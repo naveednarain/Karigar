@@ -81,6 +81,57 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [profileDropdown, setProfileDropdown] = useState(false);
 
+  // Active User session state
+  const [currentUser, setCurrentUser] = useState<{
+    id: string;
+    name: string;
+    email?: string;
+    role: 'user' | 'provider' | 'admin';
+    isDemo?: boolean;
+  } | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/me')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data?.user) {
+          setCurrentUser(data.user);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const displayName =
+    currentUser?.name ||
+    (role === 'admin' ? 'Karigar Admin' : role === 'provider' ? 'Ahsan Ali' : 'Sana Ahmed');
+  const userInitials =
+    displayName
+      .split(' ')
+      .filter(Boolean)
+      .map((n) => n[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() ||
+    (role === 'admin' ? 'KA' : role === 'provider' ? 'AA' : 'SA');
+
+  const handleSignOut = async () => {
+    setProfileDropdown(false);
+    try {
+      await fetch('/api/auth/signout', { method: 'POST' });
+    } catch {}
+    try {
+      const { createClient } = await import('@/lib/supabase/client');
+      await createClient().auth.signOut();
+    } catch {}
+    setCurrentUser(null);
+    window.location.href = `/${locale}/login`;
+  };
+
   // Global Confirmation Modal State for workspace actions
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean;
@@ -112,6 +163,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   const [customerBookings, setCustomerBookings] = useState(initialJobs);
 
   useEffect(() => {
+    setIsMounted(true);
     const syncStorage = () => {
       try {
         const storedAddrs = localStorage.getItem('karigar_saved_addresses');
@@ -135,13 +187,37 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
     };
 
     syncStorage();
+
+    // If viewing messages tab, mark conversations read
+    if (view === 'messages') {
+      try {
+        const current: string[] = JSON.parse(localStorage.getItem('karigar_read_conversations') || '[]');
+        let changed = false;
+        ['KRG-2081', 'KRG-2082', 'KRG-2083'].forEach((id) => {
+          if (!current.includes(id)) {
+            current.push(id);
+            changed = true;
+          }
+        });
+        if (changed) {
+          localStorage.setItem('karigar_read_conversations', JSON.stringify(current));
+          setReadConversations(current);
+          window.dispatchEvent(new Event('karigar_messages_read'));
+        }
+      } catch {}
+    }
+
     window.addEventListener('storage', syncStorage);
     window.addEventListener('karigar_messages_read', syncStorage);
+    window.addEventListener('karigar_chat_updated', syncStorage);
+    window.addEventListener('focus', syncStorage);
     return () => {
       window.removeEventListener('storage', syncStorage);
       window.removeEventListener('karigar_messages_read', syncStorage);
+      window.removeEventListener('karigar_chat_updated', syncStorage);
+      window.removeEventListener('focus', syncStorage);
     };
-  }, []);
+  }, [view]);
 
   const saveAddresses = (newAddrs: typeof defaultAddresses) => {
     setSavedAddresses(newAddrs);
@@ -200,43 +276,71 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
     },
   ]);
 
-  // Dynamic Messages data with persistent read state
-  const messagesList = useMemo(() => [
-    {
-      bookingId: 'KRG-2081',
-      name: role === 'provider' ? 'Sana Ahmed' : 'Ahsan Ali',
-      roleSubtitle: role === 'provider' ? 'Customer · Latifabad Unit 7' : 'Master Plumber · 4.9 ★',
-      lastMessage: 'I will be waiting outside in front of my house. Thank you!',
-      time: '16:01',
-      unread: readConversations.includes('KRG-2081') ? 0 : 1,
-      online: true,
-      initials: role === 'provider' ? 'SA' : 'AA',
-    },
-    {
-      bookingId: 'KRG-2083',
-      name: role === 'provider' ? 'Bilal Hussain' : 'Imran Memon',
-      roleSubtitle: role === 'provider' ? 'Customer · Qasimabad' : 'AC & Electrical · 4.8 ★',
-      lastMessage: 'Tomorrow at 10:00 AM works well for the AC inspection.',
-      time: 'Yesterday',
-      unread: readConversations.includes('KRG-2083') ? 0 : 0,
-      online: false,
-      initials: role === 'provider' ? 'BH' : 'IM',
-    },
-    {
-      bookingId: 'KRG-2082',
-      name: role === 'provider' ? 'Mariam Shah' : 'Nadeem Baloch',
-      roleSubtitle: role === 'provider' ? 'Customer · Jamshoro' : 'Master Carpenter · 5.0 ★',
-      lastMessage: 'Work is finished and verified. Everything looks great.',
-      time: 'Nov 15',
-      unread: readConversations.includes('KRG-2082') ? 0 : 0,
-      online: false,
-      initials: role === 'provider' ? 'MS' : 'NB',
-    },
-  ], [role, readConversations]);
+  // Dynamic Messages data with persistent read state & real latest message inspection
+  const messagesList = useMemo(() => {
+    const rawList = [
+      {
+        bookingId: 'KRG-2081',
+        name: role === 'provider' ? 'Sana Ahmed' : 'Ahsan Ali',
+        roleSubtitle: role === 'provider' ? 'Customer · Latifabad Unit 7' : 'Master Plumber · 4.9 ★',
+        defaultMessage: 'I will be waiting outside in front of my house. Thank you!',
+        defaultTime: '16:01',
+        online: true,
+        initials: role === 'provider' ? 'SA' : 'AA',
+      },
+      {
+        bookingId: 'KRG-2083',
+        name: role === 'provider' ? 'Bilal Hussain' : 'Imran Memon',
+        roleSubtitle: role === 'provider' ? 'Customer · Qasimabad' : 'AC & Electrical · 4.8 ★',
+        defaultMessage: 'Tomorrow at 10:00 AM works well for the AC inspection.',
+        defaultTime: 'Yesterday',
+        online: false,
+        initials: role === 'provider' ? 'BH' : 'IM',
+      },
+      {
+        bookingId: 'KRG-2082',
+        name: role === 'provider' ? 'Mariam Shah' : 'Nadeem Baloch',
+        roleSubtitle: role === 'provider' ? 'Customer · Jamshoro' : 'Master Carpenter · 5.0 ★',
+        defaultMessage: 'Work is finished and verified. Everything looks great.',
+        defaultTime: 'Nov 15',
+        online: false,
+        initials: role === 'provider' ? 'MS' : 'NB',
+      },
+    ];
+
+    return rawList.map((m) => {
+      let lastMsg = m.defaultMessage;
+      let time = m.defaultTime;
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`karigar_chat_${m.bookingId}`);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const last = parsed[parsed.length - 1];
+              if (last?.body) lastMsg = last.body;
+              if (last?.created_at) {
+                const d = new Date(last.created_at);
+                time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              }
+            }
+          }
+        } catch {}
+      }
+      const isRead = readConversations.includes(m.bookingId);
+      return {
+        ...m,
+        lastMessage: lastMsg,
+        time,
+        unread: isRead ? 0 : 1,
+      };
+    });
+  }, [role, readConversations, isMounted]);
 
   const totalUnreadMessages = useMemo(() => {
+    if (!isMounted) return 0;
     return messagesList.reduce((acc, m) => acc + (m.unread || 0), 0);
-  }, [messagesList]);
+  }, [messagesList, isMounted]);
 
   const isProvider = role === 'provider';
   const isAdmin = role === 'admin';
@@ -368,11 +472,11 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
         <div className="mt-7 rounded-[18px] bg-slate-50 border border-slate-100 p-3 dark:bg-slate-900/60 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-100 text-sm font-bold text-brand-900 dark:bg-brand-900/60 dark:text-brand-300">
-              {isAdmin ? 'KA' : isProvider ? 'AA' : 'SA'}
+              {userInitials}
             </span>
             <div className="min-w-0 flex-1">
               <b className="block truncate text-xs text-ink dark:text-white">
-                {isAdmin ? 'Karigar Admin' : isProvider ? 'Ahsan Ali' : 'Sana Ahmed'}
+                {displayName}
               </b>
               <small className="block text-[10px] text-slate-500 dark:text-slate-400 truncate">
                 {isAdmin ? 'Operations Manager' : isProvider ? 'Master Plumber · 4.9 ★' : 'Customer Account'}
@@ -410,7 +514,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                     4
                   </span>
                 )}
-                {label === 'Messages' && totalUnreadMessages > 0 && (
+                {label === 'Messages' && isMounted && totalUnreadMessages > 0 && (
                   <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${isActive ? 'bg-white text-brand-700' : 'bg-rose-500 text-white shadow-xs'}`}>
                     {totalUnreadMessages}
                   </span>
@@ -458,7 +562,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               }`}
             >
               <Icon size={19} />
-              {label === 'Messages' && totalUnreadMessages > 0 && (
+              {label === 'Messages' && isMounted && totalUnreadMessages > 0 && (
                 <span className="absolute top-1 right-1 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[8px] font-extrabold text-white ring-2 ring-white">
                   {totalUnreadMessages}
                 </span>
@@ -471,33 +575,33 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
       {/* MAIN CONTENT AREA */}
       <div className="md:pl-[70px] lg:pl-[240px]">
         {/* TOP HEADER BAR WITH BACK BUTTON */}
-        <header className="sticky top-0 z-20 flex h-[70px] items-center justify-between border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur-md sm:px-8 dark:border-slate-800 dark:bg-[#111a14]/95 transition-colors">
+        <header className="sticky top-0 z-20 flex h-[64px] sm:h-[70px] items-center justify-between border-b border-slate-200/80 bg-white/95 px-3 sm:px-8 backdrop-blur-md dark:border-slate-800 dark:bg-[#111a14]/95 transition-colors">
           {/* Back Button + Title */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               onClick={handleBack}
               aria-label="Back"
-              className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-xs transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="grid h-9 w-9 sm:h-10 sm:w-10 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-xs transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               <ArrowLeft size={18} />
             </button>
 
-            <div>
-              <small className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            <div className="min-w-0">
+              <small className="block text-[9px] sm:text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 truncate">
                 {isAdmin ? 'ADMIN CONSOLE' : isProvider ? 'SERVICE PROVIDER' : 'MY KARIGAR'}
               </small>
-              <h1 className="text-[16px] font-bold text-ink sm:text-[18px] leading-tight dark:text-white">
+              <h1 className="text-[14px] sm:text-[18px] font-bold text-ink leading-tight dark:text-white truncate">
                 {title}
               </h1>
             </div>
           </div>
 
           {/* Right Header Actions */}
-          <div className="flex items-center gap-2.5 sm:gap-4">
+          <div className="flex items-center gap-1.5 sm:gap-4 shrink-0">
             {/* Availability Toggle for Providers - Exactly matching Reference Image 1 Screen 3 */}
             {isProvider && (
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 shadow-xs">
-                <span className="text-[11px] font-bold text-slate-700 hidden sm:inline">
+              <div className="flex items-center gap-1.5 rounded-xl sm:rounded-2xl border border-slate-200 bg-slate-50 px-2 sm:px-3 py-1 sm:py-1.5 shadow-xs">
+                <span className="text-[11px] font-bold text-slate-700 hidden lg:inline">
                   Are you available?
                 </span>
                 <button
@@ -505,14 +609,14 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                     setAvailable(!available);
                     toast.success(available ? 'You are now offline.' : 'You are now online and ready for jobs!');
                   }}
-                  className={`relative flex h-7 w-12 items-center rounded-full p-1 transition duration-200 ${
+                  className={`relative flex h-6 sm:h-7 w-10 sm:w-12 items-center rounded-full p-0.5 sm:p-1 transition duration-200 ${
                     available ? 'bg-emerald-500' : 'bg-slate-300'
                   }`}
                   aria-label="Toggle availability"
                 >
                   <span
-                    className={`h-5 w-5 rounded-full bg-white shadow-md transform transition duration-200 ${
-                      available ? 'translate-x-5' : 'translate-x-0'
+                    className={`h-4 sm:h-5 w-4 sm:w-5 rounded-full bg-white shadow-md transform transition duration-200 ${
+                      available ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'
                     }`}
                   />
                 </button>
@@ -522,15 +626,15 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
             {/* Theme Toggle */}
             <ThemeToggle />
 
-            {/* Quick Messages Icon with real-time unread badge */}
+            {/* Quick Messages Icon with real-time unread badge (hidden on mobile, provided in bottom bar) */}
             {!isAdmin && (
               <Link
                 href={`/${locale}/${isProvider ? 'provider/messages' : 'account/messages'}`}
                 aria-label="Messages"
-                className="relative grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                className="relative hidden sm:grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 <MessageCircle size={18} />
-                {totalUnreadMessages > 0 && (
+                {isMounted && totalUnreadMessages > 0 && (
                   <span className="absolute -top-1 -right-1 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[9px] font-extrabold text-white ring-2 ring-white dark:ring-slate-900 shadow-xs">
                     {totalUnreadMessages}
                   </span>
@@ -542,28 +646,30 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
             <button
               onClick={() => setNoticeOpen(!noticeOpen)}
               aria-label="Notifications"
-              className="relative grid h-10 w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="relative grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-brand-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
             >
-              <Bell size={18} />
-              <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-white dark:ring-slate-900" />
+              <Bell size={17} />
+              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-white dark:ring-slate-900" />
             </button>
 
             {/* User Avatar with Logout dropdown */}
             <div className="relative">
               <button
                 onClick={() => setProfileDropdown(!profileDropdown)}
-                className="grid h-10 w-10 place-items-center rounded-xl bg-brand-100 text-xs font-bold text-brand-900 border border-brand-200 transition hover:scale-105"
+                className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-brand-100 text-xs font-bold text-brand-900 border border-brand-200 transition hover:scale-105"
               >
-                {isAdmin ? 'KA' : isProvider ? 'AA' : 'SA'}
+                {userInitials}
               </button>
 
               {profileDropdown && (
                 <div className="absolute right-0 top-12 z-40 w-48 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                   <div className="px-3 py-2 border-b border-slate-100">
-                    <p className="text-xs font-bold text-ink">
-                      {isAdmin ? 'Karigar Admin' : isProvider ? 'Ahsan Ali' : 'Sana Ahmed'}
+                    <p className="text-xs font-bold text-ink truncate">
+                      {displayName}
                     </p>
-                    <p className="text-[10px] text-slate-400">Hyderabad, PK</p>
+                    <p className="text-[10px] text-slate-400 capitalize">
+                      {currentUser?.role || (isProvider ? 'provider' : isAdmin ? 'admin' : 'customer')} · Hyderabad
+                    </p>
                   </div>
                   <Link
                     href={`/${locale}/${isProvider ? 'provider/profile' : 'account/profile'}`}
@@ -572,13 +678,12 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                   >
                     <User size={15} /> My Profile
                   </Link>
-                  <Link
-                    href={`/${locale}/login`}
-                    onClick={() => setProfileDropdown(false)}
-                    className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                  <button
+                    onClick={handleSignOut}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"
                   >
                     <LogOut size={15} /> Sign Out / Switch
-                  </Link>
+                  </button>
                 </div>
               )}
             </div>
@@ -624,7 +729,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
         )}
 
         {/* MAIN BODY PER VIEW */}
-        <main className="mx-auto max-w-[1440px] p-4 sm:p-7">
+        <main className="mx-auto max-w-[1440px] p-3.5 sm:p-7 pb-24 md:pb-8">
           {/* ========================================================================= */}
           {/* 1. ADMIN WORKBENCH VIEWS (All views except dashboard)                     */}
           {/* ========================================================================= */}
@@ -730,37 +835,41 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
           {isProvider && view === 'dashboard' && (
             <div className="space-y-6">
               {/* Date Header + Provider Profile Overview (Image 1 Screen 3) */}
-              <div className="flex flex-col gap-4 rounded-[26px] bg-white p-6 shadow-soft border border-slate-100 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="relative">
-                    <div className="grid h-16 w-16 place-items-center rounded-2xl bg-brand-100 text-lg font-extrabold text-brand-900 shadow-sm">
-                      AA
+              <div className="flex flex-col gap-4 rounded-[22px] sm:rounded-[26px] bg-white p-4 sm:p-6 shadow-soft border border-slate-100 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                  <div className="relative shrink-0">
+                    <div className="grid h-14 w-14 sm:h-16 sm:w-16 place-items-center rounded-2xl bg-brand-100 text-base sm:text-lg font-extrabold text-brand-900 shadow-sm">
+                      {userInitials}
                     </div>
-                    <span className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full border-2 border-white bg-emerald-500" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 sm:h-5 sm:w-5 rounded-full border-2 border-white bg-emerald-500" />
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="display text-[22px] font-extrabold text-ink">Ahsan Ali</h2>
-                      <BadgeCheck size={18} className="text-emerald-600 fill-emerald-100" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <h2 className="display text-[18px] sm:text-[22px] font-extrabold text-ink truncate">
+                        {displayName}
+                      </h2>
+                      <BadgeCheck size={18} className="text-emerald-600 fill-emerald-100 shrink-0" />
                     </div>
-                    <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-600">
-                      <span className="flex items-center text-amber-500 font-bold">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-semibold text-slate-600">
+                      <span className="flex items-center text-amber-500 font-bold shrink-0">
                         <Star size={14} fill="currentColor" className="mr-1" /> 4.9
                       </span>
-                      <span>(126 customer reviews)</span>
-                      <span>· Master Plumber</span>
+                      <span className="text-slate-300 hidden sm:inline">·</span>
+                      <span className="truncate">(126 reviews)</span>
+                      <span className="text-slate-300 hidden sm:inline">·</span>
+                      <span className="truncate">Master Plumber</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700">
-                    <CalendarDays size={14} className="mr-1.5 inline text-slate-500" />
+                <div className="flex items-center justify-between sm:justify-end gap-2.5 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 w-full sm:w-auto">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 sm:px-3.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-slate-700">
+                    <CalendarDays size={13} className="mr-1.5 inline text-slate-500" />
                     17 Nov 2026
                   </div>
                   <Link
                     href={`/${locale}/provider/profile`}
-                    className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-600 px-4 text-xs font-bold text-white transition hover:bg-brand-700"
+                    className="flex h-9 sm:h-10 items-center gap-1.5 rounded-xl bg-brand-600 px-3.5 sm:px-4 text-xs font-bold text-white transition hover:bg-brand-700 shrink-0"
                   >
                     <User size={14} /> View Profile
                   </Link>
@@ -768,41 +877,41 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               </div>
 
               {/* 4 Color-Coded Stat Cards - Exactly matching Reference Image 1 Screen 3 */}
-              <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5 sm:grid-cols-4">
                 {/* 08 Current Orders - Soft Pink/Coral */}
-                <article className="rounded-[24px] bg-[#feecef] border border-rose-100 p-5 shadow-xs">
-                  <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-rose-500 shadow-xs">
-                    <CalendarDays size={22} />
+                <article className="rounded-[20px] sm:rounded-[24px] bg-[#feecef] border border-rose-100 p-3.5 sm:p-5 shadow-xs">
+                  <div className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl bg-white text-rose-500 shadow-xs">
+                    <CalendarDays size={18} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
-                  <b className="display mt-4 block text-[30px] font-extrabold text-ink">08</b>
-                  <p className="mt-0.5 text-xs font-semibold text-rose-800">Current Orders</p>
+                  <b className="display mt-2 sm:mt-4 block text-[24px] sm:text-[30px] font-extrabold text-ink leading-tight">08</b>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-semibold text-rose-800 leading-tight">Current Orders</p>
                 </article>
 
                 {/* 250 Total Deliveries - Soft Emerald Green */}
-                <article className="rounded-[24px] bg-[#e6f8ee] border border-emerald-100 p-5 shadow-xs">
-                  <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-emerald-600 shadow-xs">
-                    <Box size={22} />
+                <article className="rounded-[20px] sm:rounded-[24px] bg-[#e6f8ee] border border-emerald-100 p-3.5 sm:p-5 shadow-xs">
+                  <div className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl bg-white text-emerald-600 shadow-xs">
+                    <Box size={18} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
-                  <b className="display mt-4 block text-[30px] font-extrabold text-ink">250</b>
-                  <p className="mt-0.5 text-xs font-semibold text-emerald-800">Total Deliveries</p>
+                  <b className="display mt-2 sm:mt-4 block text-[24px] sm:text-[30px] font-extrabold text-ink leading-tight">250</b>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-semibold text-emerald-800 leading-tight">Total Deliveries</p>
                 </article>
 
                 {/* 04 Pending Deliveries - Soft Amber/Orange */}
-                <article className="rounded-[24px] bg-[#fff4e0] border border-amber-100 p-5 shadow-xs">
-                  <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-amber-600 shadow-xs">
-                    <Clock3 size={22} />
+                <article className="rounded-[20px] sm:rounded-[24px] bg-[#fff4e0] border border-amber-100 p-3.5 sm:p-5 shadow-xs">
+                  <div className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl bg-white text-amber-600 shadow-xs">
+                    <Clock3 size={18} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
-                  <b className="display mt-4 block text-[30px] font-extrabold text-ink">04</b>
-                  <p className="mt-0.5 text-xs font-semibold text-amber-800">Pending Deliveries</p>
+                  <b className="display mt-2 sm:mt-4 block text-[24px] sm:text-[30px] font-extrabold text-ink leading-tight">04</b>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-semibold text-amber-800 leading-tight">Pending Deliveries</p>
                 </article>
 
                 {/* 500 Total KM Travelled - Soft Sky Blue */}
-                <article className="rounded-[24px] bg-[#e7f3fe] border border-blue-100 p-5 shadow-xs">
-                  <div className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-blue-600 shadow-xs">
-                    <Globe size={22} />
+                <article className="rounded-[20px] sm:rounded-[24px] bg-[#e7f3fe] border border-blue-100 p-3.5 sm:p-5 shadow-xs">
+                  <div className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl bg-white text-blue-600 shadow-xs">
+                    <Globe size={18} className="sm:w-[22px] sm:h-[22px]" />
                   </div>
-                  <b className="display mt-4 block text-[30px] font-extrabold text-ink">500</b>
-                  <p className="mt-0.5 text-xs font-semibold text-blue-800">Total KM Travelled</p>
+                  <b className="display mt-2 sm:mt-4 block text-[24px] sm:text-[30px] font-extrabold text-ink leading-tight">500</b>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-semibold text-blue-800 leading-tight">Total KM Travelled</p>
                 </article>
               </div>
 
@@ -810,13 +919,13 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               <div className="grid gap-6 lg:grid-cols-[1.2fr_.8fr]">
                 <section className="space-y-4">
                   {/* Tabs: Current, Active, Completed orders */}
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-1">
-                    <div className="flex gap-4">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-1 overflow-x-auto">
+                    <div className="flex gap-3 sm:gap-4 shrink-0">
                       {(['Current', 'Active', 'Completed'] as const).map((tabName) => (
                         <button
                           key={tabName}
                           onClick={() => setTab(tabName)}
-                          className={`relative pb-3 text-sm font-bold transition ${
+                          className={`relative pb-3 text-xs sm:text-sm font-bold transition whitespace-nowrap ${
                             tab === tabName ? 'text-emerald-700' : 'text-slate-400 hover:text-slate-600'
                           }`}
                         >
@@ -827,13 +936,13 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                         </button>
                       ))}
                     </div>
-                    <span className="text-xs font-bold text-slate-500">{tabbedJobs.length} Orders</span>
+                    <span className="text-[11px] sm:text-xs font-bold text-slate-500 shrink-0 ml-2">{tabbedJobs.length} Orders</span>
                   </div>
 
                   {/* Order Cards List matching Reference Image 1 Screen 6 */}
                   <div className="space-y-4">
                     {tabbedJobs.length === 0 ? (
-                      <div className="rounded-[24px] border border-slate-200 bg-white p-8 text-center text-slate-500">
+                      <div className="rounded-[20px] sm:rounded-[24px] border border-slate-200 bg-white p-6 sm:p-8 text-center text-slate-500 text-xs sm:text-sm">
                         No orders in {tab} right now.
                       </div>
                     ) : (
@@ -843,17 +952,17 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                           <article
                             key={j.id}
                             onClick={() => setActiveJobId(j.id)}
-                            className={`rounded-[24px] border bg-white p-5 transition duration-150 cursor-pointer shadow-soft hover:border-emerald-300 ${
+                            className={`rounded-[20px] sm:rounded-[24px] border bg-white p-4 sm:p-5 transition duration-150 cursor-pointer shadow-soft hover:border-emerald-300 ${
                               activeJobId === j.id ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-slate-100'
                             }`}
                           >
                             {/* Order ID Header */}
-                            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 sm:pb-3">
                               <span className="text-xs font-bold text-slate-500">
                                 Order ID <b className="text-ink ml-1 font-extrabold">#{j.id}</b>
                               </span>
                               <span
-                                className={`rounded-full px-3 py-1 text-[10px] font-bold ${
+                                className={`rounded-full px-2.5 sm:px-3 py-0.5 sm:py-1 text-[10px] font-bold ${
                                   status === 'New request'
                                     ? 'bg-amber-100 text-amber-800'
                                     : status === 'Completed'
@@ -866,12 +975,12 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                             </div>
 
                             {/* Service and Addresses (Matching Image 1 Screen 6) */}
-                            <div className="mt-4 space-y-2.5 text-xs text-slate-600">
+                            <div className="mt-3 sm:mt-4 space-y-2 text-xs text-slate-600">
                               <div className="flex items-start gap-2.5">
                                 <span className="h-2 w-2 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
                                 <div>
                                   <small className="block text-[10px] font-bold text-slate-400">SERVICE & CATEGORY</small>
-                                  <b className="text-ink text-sm font-bold">{j.type}</b> ({j.category})
+                                  <b className="text-ink text-xs sm:text-sm font-bold">{j.type}</b> ({j.category})
                                 </div>
                               </div>
 
@@ -879,30 +988,30 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                 <MapPin size={15} className="text-emerald-600 mt-0.5 shrink-0" />
                                 <div>
                                   <small className="block text-[10px] font-bold text-slate-400">CUSTOMER ADDRESS</small>
-                                  <p className="text-slate-800 font-medium">{j.client} · {j.area}, Hyderabad</p>
+                                  <p className="text-slate-800 font-medium text-xs sm:text-sm">{j.client} · {j.area}, Hyderabad</p>
                                 </div>
                               </div>
                             </div>
 
                             {/* Timing and Approx distance */}
-                            <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center text-xs">
+                            <div className="mt-3 sm:mt-4 grid grid-cols-3 gap-1.5 sm:gap-2 rounded-xl bg-slate-50 p-2.5 sm:p-3 text-center text-xs">
                               <div>
-                                <small className="block text-[10px] text-slate-400">Pickup / Start</small>
-                                <b className="text-ink">8:00 AM</b>
+                                <small className="block text-[9px] sm:text-[10px] text-slate-400">Pickup / Start</small>
+                                <b className="text-ink text-[11px] sm:text-xs">8:00 AM</b>
                               </div>
                               <div>
-                                <small className="block text-[10px] text-slate-400">Delivery / Visit</small>
-                                <b className="text-ink">8:30 AM</b>
+                                <small className="block text-[9px] sm:text-[10px] text-slate-400">Delivery / Visit</small>
+                                <b className="text-ink text-[11px] sm:text-xs">8:30 AM</b>
                               </div>
                               <div>
-                                <small className="block text-[10px] text-slate-400">Distance</small>
-                                <b className="text-emerald-700">Approx: {j.distance}</b>
+                                <small className="block text-[9px] sm:text-[10px] text-slate-400">Distance</small>
+                                <b className="text-emerald-700 text-[11px] sm:text-xs truncate block">{j.distance}</b>
                               </div>
                             </div>
 
                             {/* Action Buttons: Accept / Reject - Matching Image 1 Screen 6 */}
-                            <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                              <b className="text-sm font-extrabold text-ink">{j.price}</b>
+                            <div className="mt-3 sm:mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                              <b className="text-sm sm:text-base font-extrabold text-ink">{j.price}</b>
 
                               {status === 'New request' && (
                                 <div className="flex gap-2">
@@ -911,7 +1020,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                       e.stopPropagation();
                                       action(j.id, 'Rejected');
                                     }}
-                                    className="h-10 rounded-xl bg-rose-500 px-5 text-xs font-bold text-white shadow-xs hover:bg-rose-600 transition"
+                                    className="h-9 sm:h-10 rounded-xl bg-rose-500 px-3.5 sm:px-5 text-xs font-bold text-white shadow-xs hover:bg-rose-600 transition"
                                   >
                                     Reject
                                   </button>
@@ -920,7 +1029,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                       e.stopPropagation();
                                       action(j.id, 'Accepted');
                                     }}
-                                    className="h-10 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
+                                    className="h-9 sm:h-10 rounded-xl bg-emerald-600 px-3.5 sm:px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                                   >
                                     Accept
                                   </button>
@@ -933,9 +1042,9 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                     e.stopPropagation();
                                     action(j.id, status === 'Accepted' ? 'On the way' : 'Arrived');
                                   }}
-                                  className="h-10 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+                                  className="h-9 sm:h-10 rounded-xl bg-emerald-600 px-3.5 sm:px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                                 >
-                                  {status === 'Accepted' ? 'Start Journey (On the way)' : 'I’ve Arrived'}
+                                  {status === 'Accepted' ? 'Start Journey' : 'I’ve Arrived'}
                                 </button>
                               )}
 
@@ -945,7 +1054,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                     e.stopPropagation();
                                     action(j.id, 'In progress');
                                   }}
-                                  className="h-10 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+                                  className="h-9 sm:h-10 rounded-xl bg-emerald-600 px-3.5 sm:px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                                 >
                                   Start Job
                                 </button>
@@ -957,7 +1066,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                                     e.stopPropagation();
                                     action(j.id, 'Completed');
                                   }}
-                                  className="h-10 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+                                  className="h-9 sm:h-10 rounded-xl bg-emerald-600 px-3.5 sm:px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                                 >
                                   Complete Job
                                 </button>
@@ -978,7 +1087,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
 
                 {/* ROUTE MAP BY CUSTOMER HOME (Image 1 Screen 2) */}
                 <aside className="space-y-5">
-                  <section className="overflow-hidden rounded-[26px] border border-slate-100 bg-white shadow-soft">
+                  <section className="overflow-hidden rounded-[22px] sm:rounded-[26px] border border-slate-100 bg-white shadow-soft">
                     <div className="p-4 border-b border-slate-100">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
                         LIVE ROUTE PREVIEW
@@ -988,7 +1097,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                     </div>
 
                     {/* Visual Route Canvas */}
-                    <div className="relative h-[200px] bg-[#eef7ee] overflow-hidden">
+                    <div className="relative h-[180px] sm:h-[200px] bg-[#eef7ee] overflow-hidden">
                       <div
                         className="absolute inset-0 opacity-70"
                         style={{
@@ -1018,32 +1127,32 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                     </div>
 
                     {/* Customer Information (Image 1 Screen 2) */}
-                    <div className="p-5 space-y-3">
+                    <div className="p-4 sm:p-5 space-y-3">
                       <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
                         Customer information
                       </span>
-                      <div className="flex items-center gap-3">
-                        <span className="grid h-11 w-11 place-items-center rounded-full bg-amber-100 font-bold text-amber-900 text-xs">
+                      <div className="flex items-center gap-2.5 sm:gap-3">
+                        <span className="grid h-10 w-10 sm:h-11 sm:w-11 place-items-center rounded-full bg-amber-100 font-bold text-amber-900 text-xs shrink-0">
                           {currentJob.client.split(' ').map((n) => n[0]).join('')}
                         </span>
                         <div className="flex-1 min-w-0">
                           <b className="block truncate text-xs font-bold text-ink">{currentJob.client}</b>
-                          <small className="text-[11px] text-slate-500">{currentJob.area}</small>
+                          <small className="text-[11px] text-slate-500 truncate block">{currentJob.area}</small>
                         </div>
                         <a
                           href="tel:+923001234567"
-                          className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition"
+                          className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition shrink-0"
                           title="Call customer"
                         >
-                          <Phone size={17} />
+                          <Phone size={16} />
                         </a>
                         <Link
                           href={`/${locale}/chat/${currentJob.bookingId}`}
                           onClick={() => markConversationRead(currentJob.bookingId)}
-                          className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition"
+                          className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition shrink-0"
                           title="Chat with customer"
                         >
-                          <MessageCircle size={17} />
+                          <MessageCircle size={16} />
                         </Link>
                       </div>
 
@@ -1260,7 +1369,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                   <p className="text-xs text-slate-500">Coordinate repairs directly with the customer or pro.</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {totalUnreadMessages > 0 && (
+                  {isMounted && totalUnreadMessages > 0 && (
                     <button
                       onClick={markAllConversationsRead}
                       className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
@@ -1367,13 +1476,13 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               <div className="rounded-[28px] border border-slate-100 bg-white p-7 text-center shadow-soft">
                 <div className="relative mx-auto h-24 w-24">
                   <div className="grid h-24 w-24 place-items-center rounded-full bg-emerald-100 font-extrabold text-2xl text-emerald-900 border-4 border-white shadow-md">
-                    {isProvider ? 'AA' : 'SA'}
+                    {userInitials}
                   </div>
                   <span className="absolute bottom-1 right-1 h-5 w-5 rounded-full border-2 border-white bg-emerald-500" />
                 </div>
 
                 <h2 className="display mt-4 text-[24px] font-extrabold text-ink">
-                  {isProvider ? 'Ahsan Ali' : 'Sana Ahmed'}
+                  {displayName}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">
                   {isProvider ? 'Verified Master Plumber · Latifabad, Hyderabad' : 'Valued Customer · Hyderabad'}
@@ -1411,7 +1520,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700">Full Name</label>
                     <input
-                      defaultValue={isProvider ? 'Ahsan Ali' : 'Sana Ahmed'}
+                      defaultValue={displayName}
                       className="mt-1.5 h-11 w-full rounded-xl border border-slate-200 px-3 text-xs outline-none focus:border-brand-500"
                     />
                   </div>
@@ -1752,7 +1861,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
             >
               <div className="relative">
                 <Icon size={20} className={isActive ? 'stroke-[2.4]' : 'stroke-[1.8]'} />
-                {label === 'Messages' && totalUnreadMessages > 0 && (
+                {label === 'Messages' && isMounted && totalUnreadMessages > 0 && (
                   <span className="absolute -top-1 -right-2 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[8px] font-extrabold text-white">
                     {totalUnreadMessages}
                   </span>

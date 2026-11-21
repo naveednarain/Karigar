@@ -181,6 +181,8 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
     setItems(newItems);
     try {
       localStorage.setItem(storageKey, JSON.stringify(newItems));
+      window.dispatchEvent(new Event('karigar_chat_updated'));
+      window.dispatchEvent(new Event('karigar_messages_read'));
     } catch {
       // fallback
     }

@@ -1,5 +1,6 @@
 import createMiddleware from 'next-intl/middleware';
 import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 import { DEMO_COOKIE, verifyDemoSession } from '@/lib/demo/session';
 
 const intl = createMiddleware({ locales: ['en', 'ur'], defaultLocale: 'en', localePrefix: 'always' });
@@ -9,8 +10,39 @@ export default async function middleware(request: NextRequest) {
   const protectedMatch = path.match(/^\/(en|ur)\/(provider|admin|account|chat)(\/|$)/);
 
   if (protectedMatch) {
-    const role = await verifyDemoSession(request.cookies.get(DEMO_COOKIE)?.value);
+    const locale = protectedMatch[1];
     const section = protectedMatch[2];
+
+    const verified = await verifyDemoSession(
+      request.cookies.get(DEMO_COOKIE)?.value
+    );
+    let role: 'user' | 'provider' | 'admin' | null =
+      verified === 'user' || verified === 'provider' || verified === 'admin'
+        ? verified
+        : null;
+
+    // If no demo session cookie, inspect Supabase auth cookies
+    if (!role) {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (url && key) {
+        try {
+          const supabase = createServerClient(url, key, {
+            cookies: {
+              getAll: () => request.cookies.getAll(),
+              setAll: () => {},
+            },
+          });
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+
+          if (user) {
+            role = (user.user_metadata?.role as 'user' | 'provider' | 'admin') || 'user';
+          }
+        } catch {}
+      }
+    }
 
     // Admin has superuser supervisor privileges across all sections
     if (role === 'admin') {
@@ -19,19 +51,29 @@ export default async function middleware(request: NextRequest) {
 
     let allowed = false;
     if (role === 'provider') {
-      // Provider can access provider dashboard/jobs, chat, and booking detail views
       allowed =
         section === 'provider' ||
         section === 'chat' ||
         path.includes('/account/bookings');
     } else if (role === 'user') {
-      // Customer can access customer account, bookings, booking flow, and chat
       allowed = section === 'account' || section === 'book' || section === 'chat';
     }
 
-    if (!role || !allowed) {
+    // If authenticated but visiting an unauthorized section, redirect to their role's dashboard
+    // to prevent infinite loops between login and mismatched target URLs
+    if (role && !allowed) {
+      const target = request.nextUrl.clone();
+      target.pathname = `/${locale}/${
+        role === 'provider' ? 'provider/dashboard' : 'account/bookings'
+      }`;
+      target.search = '';
+      return NextResponse.redirect(target);
+    }
+
+    // If completely unauthenticated, redirect to login
+    if (!role) {
       const login = request.nextUrl.clone();
-      login.pathname = `/${protectedMatch[1]}/login`;
+      login.pathname = `/${locale}/login`;
       login.searchParams.set('next', path);
       return NextResponse.redirect(login);
     }
