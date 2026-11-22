@@ -1,1 +1,7 @@
-import{Workspace}from'@/components/workspace';export default function ProviderNotifications(){return <Workspace role="provider" view="notifications"/>}
+import { Workspace } from '@/components/workspace';
+import { getAuthUser } from '@/lib/auth-server';
+
+export default async function ProviderNotifications() {
+  const user = await getAuthUser();
+  return <Workspace role="provider" view="notifications" initialUser={user} />;
+}

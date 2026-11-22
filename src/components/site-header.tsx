@@ -2,9 +2,10 @@
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, ArrowRight, ArrowUpRight, Hammer, Menu, X, UserRound, Search, LogOut } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowUpRight, Hammer, Menu, X, UserRound, Search, LogOut, MessageSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from './theme-toggle';
+import { getTotalUnreadCount } from '@/lib/chat-unread';
 
 export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: boolean; backUrl?: string; title?: string }) {
   const t = useTranslations('nav');
@@ -19,6 +20,7 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
     name: string;
     role: 'user' | 'provider' | 'admin';
   } | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -36,6 +38,28 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
       active = false;
     };
   }, [path]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'admin') {
+      setUnreadCount(0);
+      return;
+    }
+    const updateCount = () => {
+      const c = getTotalUnreadCount(currentUser.role === 'provider' ? 'provider' : 'customer');
+      setUnreadCount(c);
+    };
+    updateCount();
+    window.addEventListener('storage', updateCount);
+    window.addEventListener('karigar_messages_read', updateCount);
+    window.addEventListener('karigar_chat_updated', updateCount);
+    window.addEventListener('focus', updateCount);
+    return () => {
+      window.removeEventListener('storage', updateCount);
+      window.removeEventListener('karigar_messages_read', updateCount);
+      window.removeEventListener('karigar_chat_updated', updateCount);
+      window.removeEventListener('focus', updateCount);
+    };
+  }, [currentUser]);
 
   const dashboardHref =
     currentUser?.role === 'provider'
@@ -161,7 +185,12 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
                   onClick={() => setOpen(false)}
                   className="flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-700 text-xs font-bold text-white shadow-xs"
                 >
-                  Go to {dashboardLabel}
+                  <span>Go to {dashboardLabel}</span>
+                  {unreadCount > 0 && (
+                    <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                      {unreadCount} unread
+                    </span>
+                  )}
                   <ArrowRight size={14} />
                 </Link>
 
@@ -205,6 +234,26 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
 
           {currentUser ? (
             <div className="flex items-center gap-2">
+              {currentUser.role !== 'admin' && (
+                <Link
+                  href={
+                    currentUser.role === 'provider'
+                      ? `/${locale}/provider/messages`
+                      : `/${locale}/account/messages`
+                  }
+                  prefetch={true}
+                  className="relative grid h-10 w-10 place-items-center rounded-xl border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+                  title="Messages"
+                >
+                  <MessageSquare size={16} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[9px] font-extrabold text-white ring-2 ring-white dark:ring-slate-900 shadow-xs">
+                      {unreadCount}
+                    </span>
+                  )}
+                </Link>
+              )}
+
               <Link
                 href={dashboardHref}
                 prefetch={true}

@@ -1,2 +1,7 @@
 import { Workspace } from '@/components/workspace';
-export default function CustomerBookings() { return <Workspace role="customer" />; }
+import { getAuthUser } from '@/lib/auth-server';
+
+export default async function CustomerBookings() {
+  const user = await getAuthUser();
+  return <Workspace role="customer" initialUser={user} />;
+}

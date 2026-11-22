@@ -3,10 +3,24 @@ import { notFound } from 'next/navigation';
 import { BadgeCheck, CalendarDays, Check, ArrowLeft, MapPin, MessageCircle, ShieldCheck, Star } from 'lucide-react';
 import { SiteHeader } from '@/components/site-header';
 import { getPublicProvider } from '@/lib/ai/providers';
+import { resolveCanonicalChatId } from '@/lib/chat-directory';
+import { getAuthUser } from '@/lib/auth-server';
 
 export default async function ProviderProfile({ params }: { params: { locale: string; id: string } }) {
-  const pro = await getPublicProvider(params.id);
+  const [pro, authUser] = await Promise.all([
+    getPublicProvider(params.id),
+    getAuthUser(),
+  ]);
   if (!pro) notFound();
+
+  const isOwnProfile = Boolean(
+    authUser &&
+    authUser.role === 'provider' &&
+    (authUser.id === pro.id || (authUser.name && authUser.name.toLowerCase().trim() === pro.name.toLowerCase().trim()))
+  );
+  const isOtherProvider = Boolean(
+    authUser && authUser.role === 'provider' && !isOwnProfile
+  );
 
   return (
     <>
@@ -133,13 +147,48 @@ export default async function ProviderProfile({ params }: { params: { locale: st
                   Final fee depends on parts and work needed. Pay cash only after inspection.
                 </p>
 
-                <Link
-                  href={`/${params.locale}/book/${pro.id}`}
-                  className="flex h-12 items-center justify-center gap-2 rounded-xl bg-[#168348] text-xs font-bold text-white shadow-xs hover:bg-[#12683b] transition"
-                >
-                  <CalendarDays size={16} />
-                  Book This Professional
-                </Link>
+                {isOwnProfile ? (
+                  <div className="space-y-2.5 pt-2">
+                    <div className="rounded-xl bg-amber-50 p-3 text-[11px] leading-5 text-amber-900 border border-amber-200">
+                      <b>This is your public profile.</b> You cannot book your own services.
+                    </div>
+                    <Link
+                      href={`/${params.locale}/provider/profile`}
+                      className="flex h-12 items-center justify-center gap-2 rounded-xl bg-slate-900 text-xs font-bold text-white shadow-xs hover:bg-black transition"
+                    >
+                      Edit Your Profile
+                    </Link>
+                    <Link
+                      href={`/${params.locale}/provider/dashboard`}
+                      className="flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      Return to Pro Dashboard
+                    </Link>
+                  </div>
+                ) : (
+                  <>
+                    {isOtherProvider && (
+                      <div className="rounded-xl bg-emerald-50 p-2.5 text-[11px] leading-4 text-emerald-900 border border-emerald-100">
+                        Logged in as <b>{authUser?.name}</b> (Pro). Booking personal home service.
+                      </div>
+                    )}
+                    <Link
+                      href={`/${params.locale}/book/${pro.id}`}
+                      className="flex h-12 items-center justify-center gap-2 rounded-xl bg-[#168348] text-xs font-bold text-white shadow-xs hover:bg-[#12683b] transition"
+                    >
+                      <CalendarDays size={16} />
+                      Book This Professional
+                    </Link>
+
+                    <Link
+                      href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill })}`}
+                      className="flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      <MessageCircle size={15} className="text-emerald-600" />
+                      Chat with {pro.name.split(' ')[0]}
+                    </Link>
+                  </>
+                )}
 
                 <div className="rounded-xl bg-emerald-50 p-3 text-[11px] leading-5 text-emerald-900 border border-emerald-100 flex items-start gap-2">
                   <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-700" />
@@ -158,13 +207,33 @@ export default async function ProviderProfile({ params }: { params: { locale: st
             <small className="block text-[10px] font-bold text-slate-400 uppercase">VISIT FROM</small>
             <b className="text-sm font-extrabold text-ink">Rs {pro.price.toLocaleString('en-PK')}</b>
           </div>
-          <Link
-            href={`/${params.locale}/book/${pro.id}`}
-            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#168348] text-xs font-bold text-white shadow-xs"
-          >
-            <CalendarDays size={15} />
-            Book a Visit
-          </Link>
+          <div className="flex items-center gap-2">
+            {isOwnProfile ? (
+              <Link
+                href={`/${params.locale}/provider/dashboard`}
+                className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-xs font-bold text-white shadow-xs"
+              >
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill })}`}
+                  className="grid h-11 w-11 place-items-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 shrink-0"
+                  title={`Chat with ${pro.name}`}
+                >
+                  <MessageCircle size={18} className="text-emerald-600" />
+                </Link>
+                <Link
+                  href={`/${params.locale}/book/${pro.id}`}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-[#168348] text-xs font-bold text-white shadow-xs"
+                >
+                  <CalendarDays size={15} />
+                  Book a Visit
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </>

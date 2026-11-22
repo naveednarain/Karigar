@@ -7,6 +7,14 @@ const intl = createMiddleware({ locales: ['en', 'ur'], defaultLocale: 'en', loca
 
 export default async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
+
+  // Provider public profile (/[locale]/provider/[id]) is open to everyone (guests, users, providers)
+  // Protected provider routes are exclusively the provider workspace subpaths
+  const isPublicProviderProfile = /^\/(en|ur)\/provider\/(?!dashboard|jobs|earnings|messages|notifications|profile(?:\/|$))[^/]+(\/|$)/.test(path);
+  if (isPublicProviderProfile) {
+    return intl(request);
+  }
+
   const protectedMatch = path.match(/^\/(en|ur)\/(provider|admin|account|chat)(\/|$)/);
 
   if (protectedMatch) {
@@ -51,10 +59,12 @@ export default async function middleware(request: NextRequest) {
 
     let allowed = false;
     if (role === 'provider') {
+      // Providers can access both provider workspace and customer account (for booking/hiring other pros)
       allowed =
         section === 'provider' ||
+        section === 'account' ||
         section === 'chat' ||
-        path.includes('/account/bookings');
+        section === 'book';
     } else if (role === 'user') {
       allowed = section === 'account' || section === 'book' || section === 'chat';
     }

@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, MapPin, ShieldCheck, Wrench } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import type { RankedProvider } from '@/lib/ai/rank';
@@ -28,6 +28,25 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ id?: string; name?: string; role?: string } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.user) setCurrentUser(d.user);
+      })
+      .catch(() => { });
+  }, []);
+
+  const isSelfBooking = Boolean(
+    currentUser &&
+    currentUser.role === 'provider' &&
+    (currentUser.id === provider.id || (currentUser.name && currentUser.name.toLowerCase().trim() === provider.name.toLowerCase().trim()))
+  );
+  const isOtherProvider = Boolean(
+    currentUser && currentUser.role === 'provider' && !isSelfBooking
+  );
 
   const form = useForm<BookingInput>({
     resolver: zodResolver(bookingSchema),
@@ -66,6 +85,8 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
         });
       }
 
+      const clientName = authData?.user?.name || currentUser?.name || 'Sana Ahmed';
+
       // Persist to user bookings cache
       const newBookingId = `KRG-${Math.floor(2090 + Math.random() * 100)}`;
       const newJob = {
@@ -73,18 +94,22 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
         bookingId: `10000000-0000-4000-8000-000000000${Math.floor(300 + Math.random() * 500)}`,
         type: data.service.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
         category: provider.skill,
-        client: authData?.user?.name || 'Sana Ahmed',
+        client: clientName,
         area: data.area,
         time: data.scheduledAt ? new Date(data.scheduledAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
         price: `From Rs ${provider.price.toLocaleString('en-PK')}`,
         distance: `${provider.distance || 2.5} km`,
         status: 'New request',
+        providerName: provider.name,
       };
 
       try {
+        const { addSyncedBooking } = await import('@/lib/sync');
+        addSyncedBooking(newJob);
+      } catch {
         const existing = JSON.parse(localStorage.getItem('karigar_user_bookings') || '[]');
         localStorage.setItem('karigar_user_bookings', JSON.stringify([newJob, ...existing]));
-      } catch {}
+      }
 
       setDone(true);
       toast.success('Your repair request has been sent to ' + provider.name);
@@ -96,6 +121,41 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
   }
 
   const steps = ['Job details', 'Time & address', 'Review'];
+
+  if (isSelfBooking) {
+    return (
+      <>
+        <SiteHeader showBack backUrl={`/${locale}/provider/${provider.id}`} title="Book a Visit" />
+        <main className="min-h-[calc(100vh-72px)] bg-[#f5f8f5] pb-20 text-ink">
+          <div className="container max-w-[580px] pt-14">
+            <div className="rounded-[32px] bg-white p-8 text-center shadow-soft border border-slate-100">
+              <span className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-amber-50 text-amber-600 shadow-xs">
+                <ShieldCheck size={36} />
+              </span>
+              <h1 className="display mt-5 text-[24px] font-extrabold text-ink">Cannot Book Your Own Profile</h1>
+              <p className="mx-auto mt-2 max-w-[420px] text-xs sm:text-sm leading-6 text-slate-600">
+                You are currently logged in as <b>{provider.name}</b>. Service providers can hire any other local professional on Karigar, but cannot book their own services.
+              </p>
+              <div className="mt-8 flex flex-wrap justify-center gap-3">
+                <Link
+                  href={`/${locale}/search`}
+                  className="inline-flex h-12 items-center gap-2 rounded-xl bg-[#168348] px-6 text-xs font-bold text-white shadow-xs hover:bg-[#12683b] transition"
+                >
+                  Explore Other Professionals
+                </Link>
+                <Link
+                  href={`/${locale}/provider/dashboard`}
+                  className="inline-flex h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                >
+                  Return to Pro Dashboard
+                </Link>
+              </div>
+            </div>
+          </div>
+        </main>
+      </>
+    );
+  }
 
   return (
     <>
@@ -120,17 +180,32 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
               <p className="mx-auto mt-2 max-w-[400px] text-xs sm:text-sm leading-6 text-slate-600">
                 {provider.name} has received your booking request. You can now track arrival and message directly.
               </p>
-              <div className="mt-8 flex justify-center gap-3">
+              <div className="mt-8 flex flex-wrap justify-center gap-3">
                 <Link
                   href={`/${locale}/account/bookings`}
                   className="inline-flex h-12 items-center gap-2 rounded-xl bg-[#168348] px-6 text-xs font-bold text-white shadow-xs hover:bg-[#12683b] transition"
                 >
                   View My Bookings <ArrowRight size={15} />
                 </Link>
+                {currentUser?.role === 'provider' && (
+                  <Link
+                    href={`/${locale}/provider/dashboard`}
+                    className="inline-flex h-12 items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                  >
+                    Return to Pro Dashboard
+                  </Link>
+                )}
               </div>
             </section>
           ) : (
             <>
+              {isOtherProvider && (
+                <div className="mb-4 rounded-2xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-900 flex items-center justify-between">
+                  <span>
+                    Hiring <b>{provider.name}</b> as <b>{currentUser?.name}</b> (Pro Account). This visit will appear in your <b>Hired Services</b>.
+                  </span>
+                </div>
+              )}
               {/* Header */}
               <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
                 <div>
@@ -159,16 +234,14 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
                     {steps.map((label, i) => (
                       <div key={label} className="flex items-center gap-2">
                         <span
-                          className={`grid h-7 w-7 place-items-center rounded-full text-xs font-bold ${
-                            step >= i + 1 ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-400'
-                          }`}
+                          className={`grid h-7 w-7 place-items-center rounded-full text-xs font-bold ${step >= i + 1 ? 'bg-emerald-600 text-white shadow-xs' : 'bg-slate-100 text-slate-400'
+                            }`}
                         >
                           {step > i + 1 ? <Check size={14} /> : `0${i + 1}`}
                         </span>
                         <span
-                          className={`hidden text-xs font-semibold sm:block ${
-                            step === i + 1 ? 'text-emerald-900 font-bold' : 'text-slate-400'
-                          }`}
+                          className={`hidden text-xs font-semibold sm:block ${step === i + 1 ? 'text-emerald-900 font-bold' : 'text-slate-400'
+                            }`}
                         >
                           {label}
                         </span>
@@ -216,11 +289,10 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
                                 type="button"
                                 key={val}
                                 onClick={() => form.setValue('urgency', val as BookingInput['urgency'])}
-                                className={`h-11 rounded-xl border text-xs font-bold transition ${
-                                  values.urgency === val
-                                    ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-500'
-                                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                                }`}
+                                className={`h-11 rounded-xl border text-xs font-bold transition ${values.urgency === val
+                                  ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-500'
+                                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                                  }`}
                               >
                                 {txt}
                               </button>

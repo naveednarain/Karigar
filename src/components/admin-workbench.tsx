@@ -41,6 +41,12 @@ import {
 import { toast } from 'sonner';
 import { ConfirmationModal } from './confirmation-modal';
 import { downloadCSV } from '@/lib/csv';
+import {
+  getAllSyncedBookings,
+  setSyncedJobStatus,
+  setSyncedProviderStatus,
+  getSyncedProviderStatuses,
+} from '@/lib/sync';
 
 type Row = Record<string, string>;
 
@@ -232,7 +238,26 @@ export function AdminWorkbench({ view }: { view: string }) {
       }
 
       // Load View Rows
-      if (defaultSamples[view]) {
+      if (view === 'bookings') {
+        const synced = getAllSyncedBookings();
+        const bookingRows = synced.map((b, idx) => ({
+          id: b.id || `b-${idx}`,
+          booking: b.id || b.bookingId,
+          customer: b.client || 'Customer',
+          professional: b.providerName || (b.category?.includes('Plumb') ? 'Ahsan Ali' : b.category?.includes('AC') ? 'Imran Memon' : 'Ahsan Ali'),
+          service: b.type || b.category || 'Service',
+          area: b.area || 'Hyderabad',
+          status: b.status || 'Requested',
+          amount: b.price || 'Rs 1,500',
+        }));
+        setRows(bookingRows);
+      } else if (view === 'providers') {
+        const savedViewRows = localStorage.getItem(`karigar_admin_providers`);
+        const baseRows = savedViewRows ? JSON.parse(savedViewRows) : defaultSamples['providers'];
+        const pStatuses = getSyncedProviderStatuses();
+        const updated = baseRows.map((r: any) => pStatuses[r.name] ? { ...r, status: pStatuses[r.name] } : r);
+        setRows(updated);
+      } else if (defaultSamples[view]) {
         const savedViewRows = localStorage.getItem(`karigar_admin_${view}`);
         if (savedViewRows) {
           setRows(JSON.parse(savedViewRows));
@@ -245,6 +270,38 @@ export function AdminWorkbench({ view }: { view: string }) {
       // Fallback
       if (defaultSamples[view]) setRows(defaultSamples[view]);
     }
+
+    const handleSync = () => {
+      if (view === 'bookings') {
+        const synced = getAllSyncedBookings();
+        const bookingRows = synced.map((b, idx) => ({
+          id: b.id || `b-${idx}`,
+          booking: b.id || b.bookingId,
+          customer: b.client || 'Customer',
+          professional: b.providerName || (b.category?.includes('Plumb') ? 'Ahsan Ali' : b.category?.includes('AC') ? 'Imran Memon' : 'Ahsan Ali'),
+          service: b.type || b.category || 'Service',
+          area: b.area || 'Hyderabad',
+          status: b.status || 'Requested',
+          amount: b.price || 'Rs 1,500',
+        }));
+        setRows(bookingRows);
+      }
+      if (view === 'providers') {
+        const savedViewRows = localStorage.getItem(`karigar_admin_providers`);
+        const baseRows = savedViewRows ? JSON.parse(savedViewRows) : defaultSamples['providers'];
+        const pStatuses = getSyncedProviderStatuses();
+        const updated = baseRows.map((r: any) => pStatuses[r.name] ? { ...r, status: pStatuses[r.name] } : r);
+        setRows(updated);
+      }
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('karigar_bookings_updated', handleSync);
+    window.addEventListener('karigar_admin_updated', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('karigar_bookings_updated', handleSync);
+      window.removeEventListener('karigar_admin_updated', handleSync);
+    };
   }, [view]);
 
   // Helper to persist view rows
@@ -357,8 +414,18 @@ export function AdminWorkbench({ view }: { view: string }) {
 
   // Row update helper
   const updateRowStatus = (rowId: string, newStatus: string, successMsg: string) => {
+    const targetRow = rows.find((r) => r.id === rowId);
     const updated = rows.map((r) => (r.id === rowId ? { ...r, status: newStatus } : r));
     persistRows(updated);
+
+    if (view === 'bookings' && targetRow) {
+      const bId = (targetRow as any).booking || targetRow.id;
+      setSyncedJobStatus(bId, newStatus);
+    }
+    if (view === 'providers' && targetRow) {
+      setSyncedProviderStatus((targetRow as any).name, newStatus);
+    }
+
     toast.success(successMsg);
     setActiveMenuId(null);
   };

@@ -1,2 +1,7 @@
 import { Workspace } from '@/components/workspace';
-export default function AdminDashboard() { return <Workspace role="admin" />; }
+import { getAuthUser } from '@/lib/auth-server';
+
+export default async function AdminDashboard() {
+  const user = await getAuthUser();
+  return <Workspace role="admin" initialUser={user} />;
+}

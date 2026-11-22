@@ -1,1 +1,7 @@
-import{Workspace}from'@/components/workspace';export default function AdminPayments(){return <Workspace role="admin" view="payments"/>}
+import { Workspace } from '@/components/workspace';
+import { getAuthUser } from '@/lib/auth-server';
+
+export default async function AdminPayments() {
+  const user = await getAuthUser();
+  return <Workspace role="admin" view="payments" initialUser={user} />;
+}

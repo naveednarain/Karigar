@@ -1,2 +1,7 @@
 import { Workspace } from '@/components/workspace';
-export default function ProviderDashboard() { return <Workspace role="provider" />; }
+import { getAuthUser } from '@/lib/auth-server';
+
+export default async function ProviderDashboard() {
+  const user = await getAuthUser();
+  return <Workspace role="provider" initialUser={user} />;
+}

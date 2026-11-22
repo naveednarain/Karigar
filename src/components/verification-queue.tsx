@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useLocale } from 'next-intl';
 import Link from 'next/link';
 import { ConfirmationModal } from './confirmation-modal';
+import { setSyncedProviderStatus } from '@/lib/sync';
 
 type Applicant = { id: string; name: string; skill: string; area: string; since: string; initials: string };
 
@@ -86,11 +87,18 @@ export function VerificationQueue() {
           const approved = JSON.parse(localStorage.getItem('karigar_approved_providers') || '[]');
           approved.push(approvedItem);
           localStorage.setItem('karigar_approved_providers', JSON.stringify(approved));
+          setSyncedProviderStatus(approvedItem.name, 'Verified');
         }
       } catch {
         // storage fallback
       }
+    } else {
+      const rejectedItem = queue.find((item) => item.id === id);
+      if (rejectedItem) {
+        setSyncedProviderStatus(rejectedItem.name, 'Rejected');
+      }
     }
+    window.dispatchEvent(new Event('karigar_admin_updated'));
 
     setActive(null);
     setReason('');

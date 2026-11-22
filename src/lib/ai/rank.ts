@@ -104,18 +104,35 @@ const generalSearchWords = new Set([
 export function rankProviders(parsed: ParsedQuery, queryText = '') {
   const normQuery = queryText.toLowerCase().trim();
   const isGeneralSearch = !normQuery || generalSearchWords.has(normQuery) || Array.from(generalSearchWords).some(w => normQuery === w);
+  const queryTokens = normQuery.split(/\s+/).filter((token) => token.length >= 3);
+
+  // Find any direct matches by provider name or skill
+  const directMatches = normQuery
+    ? marketProviders.filter((p) => {
+        const n = p.name.toLowerCase();
+        const s = p.skill.toLowerCase();
+        return (
+          n.includes(normQuery) ||
+          s.includes(normQuery) ||
+          queryTokens.some((t) => n.includes(t) || s.includes(t))
+        );
+      })
+    : [];
 
   let pool: RankedProvider[] = [];
 
   if (parsed.service !== 'other') {
-    pool = marketProviders.filter((p) => p.services.includes(parsed.service));
+    const serviceMatched = marketProviders.filter((p) => p.services.includes(parsed.service));
+    const set = new Set(serviceMatched.map((p) => p.id));
+    pool = [...serviceMatched];
+    // Always include direct name matches even if different category
+    for (const dm of directMatches) {
+      if (!set.has(dm.id)) {
+        pool.unshift(dm);
+        set.add(dm.id);
+      }
+    }
   } else if (normQuery) {
-    // If query matches a provider's name or specific skill, return matching providers!
-    const directMatches = marketProviders.filter((p) =>
-      p.name.toLowerCase().includes(normQuery) ||
-      p.skill.toLowerCase().includes(normQuery) ||
-      normQuery.split(/\s+/).some((token) => token.length > 2 && (p.name.toLowerCase().includes(token) || p.skill.toLowerCase().includes(token)))
-    );
     if (directMatches.length > 0) {
       pool = directMatches;
     } else if (isGeneralSearch) {
@@ -143,7 +160,26 @@ export function rankProviders(parsed: ParsedQuery, queryText = '') {
       const distance = Math.max(0, 10 - provider.distance * 1.25);
       const response = Math.max(0, 10 - provider.responseMinutes / 3);
       const jobs = Math.min(10, provider.jobs / 12);
-      const score = Math.round(availability + areaMatch + rating + distance + response + jobs);
+
+      // Name & skill relevance bonus
+      const pName = provider.name.toLowerCase();
+      const pSkill = provider.skill.toLowerCase();
+      let textBonus = 0;
+      if (normQuery) {
+        if (pName.includes(normQuery) || normQuery.includes(pName)) {
+          textBonus += 500;
+        } else {
+          for (const token of queryTokens) {
+            if (pName.includes(token)) {
+              textBonus += 300;
+            } else if (pSkill.includes(token)) {
+              textBonus += 80;
+            }
+          }
+        }
+      }
+
+      const score = Math.round(availability + areaMatch + rating + distance + response + jobs + textBonus);
       const areaReason =
         provider.distance < 3 ? 'Nearby' : provider.city === cityFor(parsed.area) ? 'Same city' : provider.area;
       return {
@@ -180,16 +216,34 @@ export function rankDatabaseProviders(
 ) {
   const normQuery = queryText.toLowerCase().trim();
   const isGeneralSearch = !normQuery || generalSearchWords.has(normQuery) || Array.from(generalSearchWords).some(w => normQuery === w);
+  const queryTokens = normQuery.split(/\s+/).filter((token) => token.length >= 3);
+
+  // Find any direct matches by provider name or skill
+  const directMatches = normQuery
+    ? rows.filter((r) => {
+        const n = (r.full_name || '').toLowerCase();
+        const s = `${r.skill_title || ''} ${r.headline || ''}`.toLowerCase();
+        return (
+          n.includes(normQuery) ||
+          s.includes(normQuery) ||
+          queryTokens.some((t) => n.includes(t) || s.includes(t))
+        );
+      })
+    : [];
 
   let pool = rows;
   if (parsed.service !== 'other') {
-    pool = rows.filter((row) => row.service_slugs.includes(parsed.service));
+    const serviceMatched = rows.filter((row) => row.service_slugs.includes(parsed.service));
+    const set = new Set(serviceMatched.map((r) => r.id));
+    pool = [...serviceMatched];
+    // Always include direct name matches even if different category
+    for (const dm of directMatches) {
+      if (!set.has(dm.id)) {
+        pool.unshift(dm);
+        set.add(dm.id);
+      }
+    }
   } else if (normQuery) {
-    const directMatches = rows.filter((r) =>
-      (r.full_name && r.full_name.toLowerCase().includes(normQuery)) ||
-      (r.skill_title && r.skill_title.toLowerCase().includes(normQuery)) ||
-      normQuery.split(/\s+/).some((token) => token.length > 2 && ((r.full_name && r.full_name.toLowerCase().includes(token)) || (r.skill_title && r.skill_title.toLowerCase().includes(token))))
-    );
     if (directMatches.length > 0) {
       pool = directMatches;
     } else if (isGeneralSearch) {
@@ -215,7 +269,26 @@ export function rankDatabaseProviders(
       const availability = row.is_available ? 25 : 0;
       const jobs = Math.min(10, row.jobs_completed / 12);
       const distanceScore = Math.max(0, 10 - distance * 1.25);
-      const score = Math.round(availability + areaMatch + rating + response + jobs + distanceScore);
+
+      // Name & skill relevance bonus
+      const rName = (row.full_name || '').toLowerCase();
+      const rSkill = `${row.skill_title || ''} ${row.headline || ''}`.toLowerCase();
+      let textBonus = 0;
+      if (normQuery) {
+        if (rName.includes(normQuery) || normQuery.includes(rName)) {
+          textBonus += 500;
+        } else {
+          for (const token of queryTokens) {
+            if (rName.includes(token)) {
+              textBonus += 300;
+            } else if (rSkill.includes(token)) {
+              textBonus += 80;
+            }
+          }
+        }
+      }
+
+      const score = Math.round(availability + areaMatch + rating + response + jobs + distanceScore + textBonus);
       const area = row.area_names?.[0] || row.city || 'Hyderabad';
       const reason = `${distance < 3 ? 'Nearby' : row.city === cityFor(parsed.area) ? 'Same city' : area} · ${row.rating_avg.toFixed(1)}★ · replies in ${row.response_minutes} min`;
       return {

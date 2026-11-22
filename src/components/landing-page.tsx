@@ -517,28 +517,38 @@ export function LandingPage() {
                 </p>
 
                 <div className="mt-6 space-y-3">
-                  {providers.slice(0, 4).map((p) => (
-                    <div
-                      key={p.name}
-                      className="flex items-center gap-3.5 rounded-2xl bg-white/10 p-3 backdrop-blur-xs border border-white/10"
-                    >
-                      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white font-bold text-xs text-brand-900">
-                        {p.initials}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <b className="truncate text-xs text-white">{p.name}</b>
-                          <BadgeCheck size={14} className="text-emerald-300" />
+                  {providers.slice(0, 4).map((p) => {
+                    const proId = p.name.includes('Ahsan') ? 'p01' : p.name.includes('Imran') ? 'p02' : p.name.includes('Nadeem') ? 'p03' : 'p01';
+                    return (
+                      <Link
+                        key={p.name}
+                        href={`/${locale}/provider/${proId}`}
+                        className="flex items-center gap-3.5 rounded-2xl bg-white/10 p-3 backdrop-blur-xs border border-white/10 transition hover:bg-white/20 hover:scale-[1.01]"
+                        title={`View ${p.name}'s profile and book`}
+                      >
+                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white font-bold text-xs text-brand-900">
+                          {p.initials}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <b className="truncate text-xs text-white">{p.name}</b>
+                            <BadgeCheck size={14} className="text-emerald-300" />
+                          </div>
+                          <small className="block text-[11px] text-white/70">
+                            {p.trade} · {p.area}
+                          </small>
                         </div>
-                        <small className="block text-[11px] text-white/70">
-                          {p.trade} · {p.area}
-                        </small>
-                      </div>
-                      <span className="flex items-center gap-1 text-xs font-bold text-amber-300">
-                        <Star size={13} fill="currentColor" /> {p.rating}
-                      </span>
-                    </div>
-                  ))}
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1 text-xs font-bold text-amber-300">
+                            <Star size={13} fill="currentColor" /> {p.rating}
+                          </span>
+                          <span className="rounded-lg bg-white/20 px-2 py-1 text-[10px] font-bold text-white">
+                            View →
+                          </span>
+                        </div>
+                      </Link>
+                    );
+                  })}
                 </div>
 
                 <Link

@@ -62,12 +62,37 @@ import { CustomSelect } from './custom-select';
 import { ThemeToggle } from './theme-toggle';
 import { ConfirmationModal } from './confirmation-modal';
 import { downloadCSV } from '@/lib/csv';
+import {
+  getConversationUnreadCount,
+  markChatSeen,
+  markAllChatsSeen,
+} from '@/lib/chat-unread';
+import { resolveCanonicalChatId } from '@/lib/chat-directory';
+import {
+  getAllSyncedBookings,
+  setSyncedJobStatus,
+  getSyncedProviderStatuses,
+} from '@/lib/sync';
 
 type Role = 'provider' | 'admin' | 'customer';
 
 const money = (n: number) => new Intl.NumberFormat('en-PK').format(n);
 
-export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: string }) {
+export function Workspace({
+  role,
+  view = 'dashboard',
+  initialUser = null,
+}: {
+  role: Role;
+  view?: string;
+  initialUser?: {
+    id: string;
+    name: string;
+    email?: string;
+    role: 'user' | 'provider' | 'admin';
+    isDemo?: boolean;
+  } | null;
+}) {
   const locale = useLocale();
   const pathname = usePathname();
   const router = useRouter();
@@ -81,14 +106,26 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [profileDropdown, setProfileDropdown] = useState(false);
 
-  // Active User session state
+  // Active User session state with instant initialization
   const [currentUser, setCurrentUser] = useState<{
     id: string;
     name: string;
     email?: string;
     role: 'user' | 'provider' | 'admin';
     isDemo?: boolean;
-  } | null>(null);
+  } | null>(() => {
+    if (initialUser) return initialUser;
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('karigar_cached_user');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.name) return parsed;
+        }
+      } catch {}
+    }
+    return null;
+  });
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
@@ -98,6 +135,9 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
       .then((data) => {
         if (active && data?.user) {
           setCurrentUser(data.user);
+          try {
+            localStorage.setItem('karigar_cached_user', JSON.stringify(data.user));
+          } catch {}
         }
       })
       .catch(() => {});
@@ -108,7 +148,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
 
   const displayName =
     currentUser?.name ||
-    (role === 'admin' ? 'Karigar Admin' : role === 'provider' ? 'Ahsan Ali' : 'Sana Ahmed');
+    (role === 'admin' ? 'Operations Admin' : role === 'provider' ? 'Ahsan Ali' : 'Sana Ahmed');
   const userInitials =
     displayName
       .split(' ')
@@ -117,10 +157,13 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
       .slice(0, 2)
       .join('')
       .toUpperCase() ||
-    (role === 'admin' ? 'KA' : role === 'provider' ? 'AA' : 'SA');
+    (role === 'admin' ? 'OA' : role === 'provider' ? 'AA' : 'SA');
 
   const handleSignOut = async () => {
     setProfileDropdown(false);
+    try {
+      localStorage.removeItem('karigar_cached_user');
+    } catch {}
     try {
       await fetch('/api/auth/signout', { method: 'POST' });
     } catch {}
@@ -158,9 +201,14 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   const [newAddrTitle, setNewAddrTitle] = useState('');
   const [newAddrText, setNewAddrText] = useState('');
 
-  // Persistent Read Conversations
-  const [readConversations, setReadConversations] = useState<string[]>([]);
-  const [customerBookings, setCustomerBookings] = useState(initialJobs);
+  // Unread Trigger to recompute chat badge across components/tabs
+  const [unreadTrigger, setUnreadTrigger] = useState(0);
+  const [customerBookings, setCustomerBookings] = useState<any[]>(() => {
+    if (typeof window !== 'undefined') {
+      return getAllSyncedBookings();
+    }
+    return initialJobs;
+  });
 
   useEffect(() => {
     setIsMounted(true);
@@ -172,49 +220,28 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
         } else {
           localStorage.setItem('karigar_saved_addresses', JSON.stringify(defaultAddresses));
         }
-        const storedReads = localStorage.getItem('karigar_read_conversations');
-        if (storedReads) {
-          setReadConversations(JSON.parse(storedReads));
-        }
-        const storedBookings = localStorage.getItem('karigar_user_bookings');
-        if (storedBookings) {
-          const userAdded = JSON.parse(storedBookings);
-          setCustomerBookings([...userAdded, ...initialJobs]);
-        }
+        const synced = getAllSyncedBookings();
+        setCustomerBookings(synced);
       } catch {
         // storage fallback
       }
+      setUnreadTrigger((t) => t + 1);
     };
 
     syncStorage();
 
-    // If viewing messages tab, mark conversations read
-    if (view === 'messages') {
-      try {
-        const current: string[] = JSON.parse(localStorage.getItem('karigar_read_conversations') || '[]');
-        let changed = false;
-        ['KRG-2081', 'KRG-2082', 'KRG-2083'].forEach((id) => {
-          if (!current.includes(id)) {
-            current.push(id);
-            changed = true;
-          }
-        });
-        if (changed) {
-          localStorage.setItem('karigar_read_conversations', JSON.stringify(current));
-          setReadConversations(current);
-          window.dispatchEvent(new Event('karigar_messages_read'));
-        }
-      } catch {}
-    }
-
     window.addEventListener('storage', syncStorage);
     window.addEventListener('karigar_messages_read', syncStorage);
     window.addEventListener('karigar_chat_updated', syncStorage);
+    window.addEventListener('karigar_bookings_updated', syncStorage);
+    window.addEventListener('karigar_admin_updated', syncStorage);
     window.addEventListener('focus', syncStorage);
     return () => {
       window.removeEventListener('storage', syncStorage);
       window.removeEventListener('karigar_messages_read', syncStorage);
       window.removeEventListener('karigar_chat_updated', syncStorage);
+      window.removeEventListener('karigar_bookings_updated', syncStorage);
+      window.removeEventListener('karigar_admin_updated', syncStorage);
       window.removeEventListener('focus', syncStorage);
     };
   }, [view]);
@@ -227,25 +254,17 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   };
 
   const markConversationRead = (bookingId: string) => {
-    try {
-      const current: string[] = JSON.parse(localStorage.getItem('karigar_read_conversations') || '[]');
-      if (!current.includes(bookingId)) {
-        current.push(bookingId);
-        localStorage.setItem('karigar_read_conversations', JSON.stringify(current));
-        setReadConversations([...current]);
-        window.dispatchEvent(new Event('karigar_messages_read'));
-      }
-    } catch {}
+    markChatSeen(bookingId, role === 'provider' ? 'provider' : 'customer');
+    setUnreadTrigger((t) => t + 1);
   };
 
   const markAllConversationsRead = () => {
-    try {
-      const allIds = ['KRG-2081', 'KRG-2082', 'KRG-2083'];
-      localStorage.setItem('karigar_read_conversations', JSON.stringify(allIds));
-      setReadConversations(allIds);
-      window.dispatchEvent(new Event('karigar_messages_read'));
-      toast.success('All messages marked as read.');
-    } catch {}
+    markAllChatsSeen(
+      role === 'provider' ? 'provider' : 'customer',
+      ['KRG-2081', 'KRG-2082', 'KRG-2083']
+    );
+    setUnreadTrigger((t) => t + 1);
+    toast.success('All messages marked as read.');
   };
 
   // Notifications mock data
@@ -327,15 +346,18 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
           }
         } catch {}
       }
-      const isRead = readConversations.includes(m.bookingId);
+      const unreadCount = getConversationUnreadCount(
+        m.bookingId,
+        role === 'provider' ? 'provider' : 'customer'
+      );
       return {
         ...m,
         lastMessage: lastMsg,
         time,
-        unread: isRead ? 0 : 1,
+        unread: unreadCount,
       };
     });
-  }, [role, readConversations, isMounted]);
+  }, [role, isMounted, unreadTrigger]);
 
   const totalUnreadMessages = useMemo(() => {
     if (!isMounted) return 0;
@@ -366,7 +388,9 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
         ['Dashboard', '/provider/dashboard', Home],
         ['My Jobs', '/provider/jobs', ClipboardList],
         ['Messages', '/provider/messages', MessageCircle],
+        ['Hired', '/account/bookings', CalendarDays],
         ['Earnings', '/provider/earnings', Wallet],
+        ['Book a Pro', '/search', Search],
         ['Notifications', '/provider/notifications', Bell],
         ['My Profile', '/provider/profile', UserRound],
       ] as const)
@@ -415,6 +439,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
   // Job Actions
   const action = async (id: string, status: string) => {
     setJobStatuses((s) => ({ ...s, [id]: status }));
+    setSyncedJobStatus(id, status);
     toast.success(
       status === 'Accepted'
         ? 'Job accepted. Customer has been notified.'
@@ -432,14 +457,15 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
     );
   };
 
-  const currentJob = initialJobs.find((j) => j.id === activeJobId) || initialJobs[0];
+  const allSyncedJobs = customerBookings;
+  const currentJob = allSyncedJobs.find((j) => j.id === activeJobId) || allSyncedJobs[0] || initialJobs[0];
 
   // Provider Filtered Jobs for Dashboard Tabs
-  const tabbedJobs = initialJobs.filter((j) => {
-    const status = jobStatuses[j.id] || j.status;
-    if (tab === 'Current') return status === 'New request';
-    if (tab === 'Active') return ['Accepted', 'On the way', 'Arrived', 'In progress'].includes(status);
-    return status === 'Completed';
+  const tabbedJobs = allSyncedJobs.filter((j) => {
+    const rawStatus = (jobStatuses[j.id] || j.status || '').toLowerCase();
+    if (tab === 'Current') return rawStatus.includes('new') || rawStatus.includes('request');
+    if (tab === 'Active') return rawStatus.includes('accept') || rawStatus.includes('way') || rawStatus.includes('arrive') || rawStatus.includes('progress');
+    return rawStatus.includes('complete');
   });
 
   // Back Navigation Helper
@@ -484,6 +510,16 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
             </div>
           </div>
         </div>
+
+        {isCustomer && initialUser?.role === 'provider' && (
+          <Link
+            href={`/${locale}/provider/dashboard`}
+            className="mt-3 flex items-center justify-between rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-800 transition"
+          >
+            <span>← Pro Workspace</span>
+            <span className="rounded bg-white/20 px-1.5 py-0.5 text-[9px]">Switch</span>
+          </Link>
+        )}
 
         {/* Navigation Section */}
         <p className="mb-2 mt-7 px-2 text-[10px] font-bold uppercase tracking-[.18em] text-slate-400 dark:text-slate-500">
@@ -868,6 +904,12 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                     17 Nov 2026
                   </div>
                   <Link
+                    href={`/${locale}/search`}
+                    className="flex h-9 sm:h-10 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 sm:px-3.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100 shrink-0"
+                  >
+                    <Search size={14} className="text-emerald-700" /> Book a Pro
+                  </Link>
+                  <Link
                     href={`/${locale}/provider/profile`}
                     className="flex h-9 sm:h-10 items-center gap-1.5 rounded-xl bg-brand-600 px-3.5 sm:px-4 text-xs font-bold text-white transition hover:bg-brand-700 shrink-0"
                   >
@@ -1133,7 +1175,7 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                       </span>
                       <div className="flex items-center gap-2.5 sm:gap-3">
                         <span className="grid h-10 w-10 sm:h-11 sm:w-11 place-items-center rounded-full bg-amber-100 font-bold text-amber-900 text-xs shrink-0">
-                          {currentJob.client.split(' ').map((n) => n[0]).join('')}
+                          {String(currentJob?.client || 'Customer').split(' ').map((n: string) => n[0]).join('')}
                         </span>
                         <div className="flex-1 min-w-0">
                           <b className="block truncate text-xs font-bold text-ink">{currentJob.client}</b>
@@ -1146,14 +1188,24 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                         >
                           <Phone size={16} />
                         </a>
-                        <Link
-                          href={`/${locale}/chat/${currentJob.bookingId}`}
-                          onClick={() => markConversationRead(currentJob.bookingId)}
-                          className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition shrink-0"
-                          title="Chat with customer"
-                        >
-                          <MessageCircle size={16} />
-                        </Link>
+                        {(() => {
+                          const chatTargetId = resolveCanonicalChatId(currentJob.id, currentJob);
+                          return (
+                            <Link
+                              href={`/${locale}/chat/${chatTargetId}`}
+                              onClick={() => markConversationRead(chatTargetId)}
+                              className="relative grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition shrink-0"
+                              title="Chat with customer"
+                            >
+                              <MessageCircle size={16} />
+                              {isMounted && getConversationUnreadCount(chatTargetId, 'provider') > 0 && (
+                                <span className="absolute -top-1 -right-1 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[8px] font-extrabold text-white ring-2 ring-white shadow-xs">
+                                  {getConversationUnreadCount(chatTargetId, 'provider')}
+                                </span>
+                              )}
+                            </Link>
+                          );
+                        })()}
                       </div>
 
                       <div className="rounded-xl bg-slate-50 p-3 text-[11px] leading-5 text-slate-600 border border-slate-100">
@@ -1195,12 +1247,12 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {initialJobs
+                {customerBookings
                   .filter((j) => {
-                    const st = jobStatuses[j.id] || j.status;
-                    if (jobsFilter === 'New') return st === 'New request';
-                    if (jobsFilter === 'Active') return ['Accepted', 'On the way', 'Arrived', 'In progress'].includes(st);
-                    if (jobsFilter === 'Completed') return st === 'Completed';
+                    const st = (jobStatuses[j.id] || j.status || '').toLowerCase();
+                    if (jobsFilter === 'New') return st.includes('new') || st.includes('request');
+                    if (jobsFilter === 'Active') return st.includes('accept') || st.includes('way') || st.includes('arrive') || st.includes('progress');
+                    if (jobsFilter === 'Completed') return st.includes('complete');
                     return true;
                   })
                   .map((j) => {
@@ -1237,14 +1289,24 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                         <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
                           <b className="text-sm font-extrabold text-ink">{j.price}</b>
                           <div className="flex items-center gap-2">
-                            <Link
-                              href={`/${locale}/chat/${j.bookingId}`}
-                              onClick={() => markConversationRead(j.bookingId)}
-                              className="grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200"
-                              title="Chat"
-                            >
-                              <MessageCircle size={16} />
-                            </Link>
+                            {(() => {
+                              const chatTargetId = resolveCanonicalChatId(j.id, j);
+                              return (
+                                <Link
+                                  href={`/${locale}/chat/${chatTargetId}`}
+                                  onClick={() => markConversationRead(chatTargetId)}
+                                  className="relative grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                  title="Chat"
+                                >
+                                  <MessageCircle size={16} />
+                                  {isMounted && getConversationUnreadCount(chatTargetId, isProvider ? 'provider' : 'customer') > 0 && (
+                                    <span className="absolute -top-1 -right-1 grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[8px] font-extrabold text-white ring-2 ring-white shadow-xs">
+                                      {getConversationUnreadCount(chatTargetId, isProvider ? 'provider' : 'customer')}
+                                    </span>
+                                  )}
+                                </Link>
+                              );
+                            })()}
                             <Link
                               href={`/${locale}/provider/jobs/${j.bookingId}`}
                               className="rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
@@ -1575,38 +1637,54 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {providers.map((p) => (
-                  <div key={p.name} className="rounded-[24px] border border-slate-100 bg-white p-5 shadow-soft flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-sm font-bold text-emerald-900">
-                          {p.initials}
-                        </span>
-                        <div>
-                          <b className="block text-sm font-bold text-ink">{p.name}</b>
-                          <small className="text-xs text-slate-500">{p.trade}</small>
+                {providers.map((p) => {
+                  const proId = p.name.includes('Ahsan') ? 'p01' : p.name.includes('Imran') ? 'p02' : p.name.includes('Nadeem') ? 'p03' : 'p01';
+                  const chatId = resolveCanonicalChatId(proId, { providerName: p.name });
+                  return (
+                    <div key={p.name} className="rounded-[24px] border border-slate-100 bg-white p-5 shadow-soft flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <Link href={`/${locale}/provider/${proId}`} className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 text-sm font-bold text-emerald-900 transition hover:scale-105">
+                            {p.initials}
+                          </Link>
+                          <div>
+                            <Link href={`/${locale}/provider/${proId}`} className="block text-sm font-bold text-ink hover:text-emerald-700 transition">
+                              {p.name}
+                            </Link>
+                            <small className="text-xs text-slate-500">{p.trade}</small>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between text-xs text-slate-600 border-t border-slate-50 pt-2.5">
+                          <span className="flex items-center gap-1 font-bold text-amber-500">
+                            <Star size={13} fill="currentColor" /> {p.rating}
+                          </span>
+                          <span>{p.jobs} jobs completed</span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">{p.area}</p>
+                      </div>
+
+                      <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <b className="text-xs text-ink">{p.price}</b>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/${locale}/chat/${chatId}`}
+                            onClick={() => markConversationRead(chatId)}
+                            className="grid h-8 w-8 place-items-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
+                            title={`Chat with ${p.name}`}
+                          >
+                            <MessageCircle size={14} />
+                          </Link>
+                          <Link
+                            href={`/${locale}/book/${proId}`}
+                            className="rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
+                          >
+                            Book Again →
+                          </Link>
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center justify-between text-xs text-slate-600 border-t border-slate-50 pt-2.5">
-                        <span className="flex items-center gap-1 font-bold text-amber-500">
-                          <Star size={13} fill="currentColor" /> {p.rating}
-                        </span>
-                        <span>{p.jobs} jobs completed</span>
-                      </div>
-                      <p className="mt-2 text-xs text-slate-500">{p.area}</p>
                     </div>
-
-                    <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
-                      <b className="text-xs text-ink">{p.price}</b>
-                      <Link
-                        href={`/${locale}/search?q=${encodeURIComponent(p.trade)}`}
-                        className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
-                      >
-                        Book Again →
-                      </Link>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1741,12 +1819,22 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                   <h2 className="text-[22px] font-extrabold text-ink">Your Home Bookings</h2>
                   <p className="text-xs text-slate-500">Track active repairs, message your technician, or re-book.</p>
                 </div>
-                <Link
-                  href={`/${locale}/search`}
-                  className="flex h-11 items-center gap-2 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
-                >
-                  <Plus size={16} /> Book New Service
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  {initialUser?.role === 'provider' && (
+                    <Link
+                      href={`/${locale}/provider/dashboard`}
+                      className="flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50"
+                    >
+                      ← Back to Pro Dashboard
+                    </Link>
+                  )}
+                  <Link
+                    href={`/${locale}/search`}
+                    className="flex h-11 items-center gap-2 rounded-xl bg-emerald-600 px-5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+                  >
+                    <Plus size={16} /> Book New Service
+                  </Link>
+                </div>
               </div>
 
               {/* Bookings List */}
@@ -1777,8 +1865,23 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                             <Wrench size={18} />
                           </span>
                           <div className="flex-1">
-                            <h4 className="text-sm font-bold text-ink">{j.type}</h4>
-                            <p className="text-xs text-slate-500">{j.category} · Assigned to Ahsan Ali</p>
+                            {(() => {
+                              const assignedPro = j.providerName || (
+                                j.category?.toLowerCase().includes('plumb') || j.type?.toLowerCase().includes('leak') || j.type?.toLowerCase().includes('tap')
+                                  ? 'Ahsan Ali'
+                                  : j.category?.toLowerCase().includes('ac') || j.category?.toLowerCase().includes('electric')
+                                  ? 'Imran Memon'
+                                  : j.category?.toLowerCase().includes('carpent')
+                                  ? 'Nadeem Baloch'
+                                  : 'Ahsan Ali'
+                              );
+                              return (
+                                <>
+                                  <h4 className="text-sm font-bold text-ink">{j.type}</h4>
+                                  <p className="text-xs text-slate-500">{j.category} · Assigned to {assignedPro}</p>
+                                </>
+                              );
+                            })()}
                             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
                               <span><MapPin size={13} className="inline mr-1 text-emerald-600" />{j.area}</span>
                               <span><Clock3 size={13} className="inline mr-1 text-slate-400" />{j.time}</span>
@@ -1789,13 +1892,32 @@ export function Workspace({ role, view = 'dashboard' }: { role: Role; view?: str
                         <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
                           <b className="text-sm font-bold text-ink">{j.price}</b>
                           <div className="flex gap-2">
-                            <Link
-                              href={`/${locale}/chat/${j.bookingId}`}
-                              onClick={() => markConversationRead(j.bookingId)}
-                              className="flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
-                            >
-                              <MessageCircle size={14} /> Chat
-                            </Link>
+                            {(() => {
+                              const assignedPro = j.providerName || (
+                                j.category?.toLowerCase().includes('plumb') || j.type?.toLowerCase().includes('leak') || j.type?.toLowerCase().includes('tap')
+                                  ? 'Ahsan Ali'
+                                  : j.category?.toLowerCase().includes('ac') || j.category?.toLowerCase().includes('electric')
+                                  ? 'Imran Memon'
+                                  : j.category?.toLowerCase().includes('carpent')
+                                  ? 'Nadeem Baloch'
+                                  : 'Ahsan Ali'
+                              );
+                              const chatTargetId = resolveCanonicalChatId(j.id, { ...j, providerName: assignedPro });
+                              return (
+                                <Link
+                                  href={`/${locale}/chat/${chatTargetId}`}
+                                  onClick={() => markConversationRead(chatTargetId)}
+                                  className="relative flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                                >
+                                  <MessageCircle size={14} /> Chat with {assignedPro.split(' ')[0]}
+                                  {isMounted && getConversationUnreadCount(chatTargetId, 'customer') > 0 && (
+                                    <span className="grid h-4 min-w-4 px-1 place-items-center rounded-full bg-rose-500 text-[8px] font-extrabold text-white">
+                                      {getConversationUnreadCount(chatTargetId, 'customer')}
+                                    </span>
+                                  )}
+                                </Link>
+                              );
+                            })()}
                             <Link
                               href={`/${locale}/account/bookings/${j.bookingId}`}
                               className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"

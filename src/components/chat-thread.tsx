@@ -5,28 +5,27 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ChangeEvent } from 'react';
 import {
   ArrowLeft,
-  Check,
   CheckCheck,
   ImagePlus,
-  MapPin,
-  MoreHorizontal,
   Phone,
   Send,
-  ShieldAlert,
-  Sparkles,
-  Camera,
   X,
   BadgeCheck,
+  ArrowLeftRight,
+  ShieldCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { jobs } from '@/lib/data';
+import { markChatSeen } from '@/lib/chat-unread';
+import { resolveCanonicalChatId } from '@/lib/chat-directory';
 
-type Message = {
+export type ChatMessage = {
   id: string;
-  sender_id: string;
+  sender_role: 'customer' | 'provider';
+  sender_name: string;
   body: string;
   created_at: string;
   read_at?: string | null;
-  pending?: boolean;
   images?: string[];
 };
 
@@ -40,7 +39,8 @@ const bookingDirectory: Record<
     service: string;
     area: string;
     avatarInitials: string;
-    defaultMessages: Message[];
+    customerInitials: string;
+    defaultMessages: ChatMessage[];
   }
 > = {
   'KRG-2081': {
@@ -50,22 +50,26 @@ const bookingDirectory: Record<
     service: 'Pipeline Leakage Repair',
     area: 'Latifabad Unit 7',
     avatarInitials: 'AA',
+    customerInitials: 'SA',
     defaultMessages: [
       {
         id: 'msg-1',
-        sender_id: 'other',
+        sender_role: 'provider',
+        sender_name: 'Ahsan Ali',
         body: 'Assalam-o-Alaikum Sana! I have accepted your plumbing repair request for Latifabad.',
         created_at: new Date(Date.now() - 3600000).toISOString(),
       },
       {
         id: 'msg-2',
-        sender_id: 'other',
+        sender_role: 'provider',
+        sender_name: 'Ahsan Ali',
         body: "I am gathering the PVC pipe fittings and Teflon tape. I'll be at your location in approx 25 minutes.",
         created_at: new Date(Date.now() - 2400000).toISOString(),
       },
       {
         id: 'msg-3',
-        sender_id: 'self',
+        sender_role: 'customer',
+        sender_name: 'Sana Ahmed',
         body: 'Walaikum Assalam Ahsan bhai. I am waiting at the main gate. Please call when you reach the lane.',
         created_at: new Date(Date.now() - 1200000).toISOString(),
         images: [
@@ -81,22 +85,26 @@ const bookingDirectory: Record<
     service: 'Split AC Gas Inverter Servicing',
     area: 'Qasimabad Phase 1',
     avatarInitials: 'IM',
+    customerInitials: 'BH',
     defaultMessages: [
       {
         id: 'msg-101',
-        sender_id: 'other',
+        sender_role: 'provider',
+        sender_name: 'Imran Memon',
         body: 'Hello Bilal! Received your AC gas charging and cooling check booking for Qasimabad.',
         created_at: new Date(Date.now() - 7200000).toISOString(),
       },
       {
         id: 'msg-102',
-        sender_id: 'self',
+        sender_role: 'customer',
+        sender_name: 'Bilal Hussain',
         body: 'Yes Imran bhai, cooling is very low and outdoor unit seems to be tripping frequently.',
         created_at: new Date(Date.now() - 5400000).toISOString(),
       },
       {
         id: 'msg-103',
-        sender_id: 'other',
+        sender_role: 'provider',
+        sender_name: 'Imran Memon',
         body: 'Understood. I will bring the manifold gauge and R410A gas cylinder for pressure check.',
         created_at: new Date(Date.now() - 3600000).toISOString(),
       },
@@ -109,16 +117,19 @@ const bookingDirectory: Record<
     service: 'Cabinet Door Lock Repair',
     area: 'Jamshoro City',
     avatarInitials: 'NB',
+    customerInitials: 'MS',
     defaultMessages: [
       {
         id: 'msg-201',
-        sender_id: 'other',
+        sender_role: 'provider',
+        sender_name: 'Nadeem Baloch',
         body: 'Assalam-o-Alaikum! Nadeem Baloch here regarding your woodwork appointment in Jamshoro.',
         created_at: new Date(Date.now() - 14400000).toISOString(),
       },
       {
         id: 'msg-202',
-        sender_id: 'self',
+        sender_role: 'customer',
+        sender_name: 'Mariam Shah',
         body: 'Hello Nadeem, the lock mechanism is jammed and the hinge needs tightening.',
         created_at: new Date(Date.now() - 10800000).toISOString(),
       },
@@ -126,71 +137,138 @@ const bookingDirectory: Record<
   },
 };
 
+function normalizeMessage(m: any): ChatMessage {
+  const role: 'customer' | 'provider' =
+    m.sender_role === 'provider' || m.sender_role === 'customer'
+      ? m.sender_role
+      : m.sender_id === 'other'
+      ? 'provider'
+      : 'customer';
+
+  return {
+    id: m.id || crypto.randomUUID(),
+    sender_role: role,
+    sender_name: m.sender_name || (role === 'provider' ? 'Ahsan Ali' : 'Sana Ahmed'),
+    body: m.body || '',
+    created_at: m.created_at || new Date().toISOString(),
+    images: Array.isArray(m.images) ? m.images : undefined,
+  };
+}
+
 export function ChatThread({ bookingId }: { bookingId: string }) {
   const locale = useLocale();
   const router = useRouter();
-  const meta = bookingDirectory[bookingId] || {
+
+  // Resolve to canonical conversation ID so that ongoing chats continue seamlessly
+  const canonicalId = resolveCanonicalChatId(bookingId);
+  const foundJob = jobs.find((j) => j.id === bookingId || j.bookingId === bookingId || j.id === canonicalId);
+  const meta = bookingDirectory[canonicalId] || bookingDirectory[bookingId] || {
     proName: 'Ahsan Ali',
-    proTrade: 'Service Professional',
-    customerName: 'Customer',
-    service: 'Home Service',
-    area: 'Hyderabad',
-    avatarInitials: 'KP',
+    proTrade: foundJob ? foundJob.category : 'Service Professional',
+    customerName: foundJob ? foundJob.client : 'Customer',
+    service: foundJob ? foundJob.type : 'Home Service',
+    area: foundJob ? foundJob.area : 'Hyderabad',
+    avatarInitials: 'AA',
+    customerInitials: foundJob ? foundJob.client.slice(0, 2).toUpperCase() : 'CU',
     defaultMessages: [
       {
         id: 'def-1',
-        sender_id: 'other',
+        sender_role: 'provider' as const,
+        sender_name: 'Ahsan Ali',
         body: `Hello! I have received your service request #${bookingId}. How can I assist you?`,
         created_at: new Date().toISOString(),
       },
     ],
   };
 
-  const storageKey = `karigar_chat_${bookingId}`;
-  const [items, setItems] = useState<Message[]>([]);
+  const storageKey = `karigar_chat_${canonicalId}`;
+  const [items, setItems] = useState<ChatMessage[]>([]);
   const [body, setBody] = useState('');
-  const [typing, setTyping] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const tail = useRef<HTMLDivElement>(null);
 
-  // Load chat messages from localStorage on mount & mark conversation as read
+  // Active user and perspective role
+  const [activeRole, setActiveRole] = useState<'customer' | 'provider'>('customer');
+
   useEffect(() => {
-    try {
-      // Mark this bookingId as read in persistent storage
-      const readList = JSON.parse(localStorage.getItem('karigar_read_conversations') || '[]');
-      if (!readList.includes(bookingId)) {
-        readList.push(bookingId);
-        localStorage.setItem('karigar_read_conversations', JSON.stringify(readList));
-      }
-      window.dispatchEvent(new Event('karigar_messages_read'));
+    // Detect current authenticated persona from /api/auth/me
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.user) {
+          const role = d.user.role === 'provider' ? 'provider' : 'customer';
+          setActiveRole(role);
+          markChatSeen(canonicalId, role);
+        }
+      })
+      .catch(() => {});
+  }, [canonicalId]);
 
-      // Load messages
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        setItems(JSON.parse(stored));
-      } else {
+  // Load chat messages from localStorage on mount & listen for real-time cross-tab sync
+  useEffect(() => {
+    const loadAndMarkRead = () => {
+      try {
+        // Mark this conversation as seen immediately for current active perspective
+        markChatSeen(canonicalId, activeRole);
+
+        // Load messages
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setItems(parsed.map(normalizeMessage));
+          } else {
+            setItems(meta.defaultMessages);
+            localStorage.setItem(storageKey, JSON.stringify(meta.defaultMessages));
+          }
+        } else {
+          setItems(meta.defaultMessages);
+          localStorage.setItem(storageKey, JSON.stringify(meta.defaultMessages));
+        }
+      } catch {
         setItems(meta.defaultMessages);
-        localStorage.setItem(storageKey, JSON.stringify(meta.defaultMessages));
       }
-    } catch {
-      setItems(meta.defaultMessages);
-    }
-  }, [bookingId, storageKey]);
+    };
 
-  function saveMessages(newItems: Message[]) {
+    loadAndMarkRead();
+
+    // Listen for incoming messages from other tabs or actions
+    const handleSync = () => {
+      try {
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            setItems(parsed.map(normalizeMessage));
+            // Since user is currently actively looking at this chat, mark seen
+            markChatSeen(canonicalId, activeRole);
+          }
+        }
+      } catch {}
+    };
+
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('karigar_chat_updated', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('karigar_chat_updated', handleSync);
+    };
+  }, [canonicalId, storageKey, meta.defaultMessages, activeRole]);
+
+  function saveMessages(newItems: ChatMessage[]) {
     setItems(newItems);
     try {
       localStorage.setItem(storageKey, JSON.stringify(newItems));
+      // Mark seen for the sender
+      markChatSeen(canonicalId, activeRole);
       window.dispatchEvent(new Event('karigar_chat_updated'));
       window.dispatchEvent(new Event('karigar_messages_read'));
-    } catch {
-      // fallback
-    }
+    } catch {}
   }
 
   useEffect(() => {
     tail.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [items, typing]);
+  }, [items]);
 
   function handlePhotoUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -205,9 +283,12 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
     const text = body.trim();
     if (!text && pendingImages.length === 0) return;
 
-    const newMessage: Message = {
+    const senderName = activeRole === 'provider' ? meta.proName : meta.customerName;
+
+    const newMessage: ChatMessage = {
       id: crypto.randomUUID(),
-      sender_id: 'self',
+      sender_role: activeRole,
+      sender_name: senderName,
       body: text || (pendingImages.length > 0 ? 'Sent photo' : ''),
       created_at: new Date().toISOString(),
       images: pendingImages.length > 0 ? [...pendingImages] : undefined,
@@ -217,86 +298,123 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
     saveMessages(updated);
     setBody('');
     setPendingImages([]);
-
-    // Contextual auto-reply from this specific provider
-    setTimeout(() => {
-      setTyping(true);
-      setTimeout(() => {
-        setTyping(false);
-        const replyText =
-          items.length % 2 === 0
-            ? `Understood! I have noted down the details. See you shortly at ${meta.area}.`
-            : `Got it! Just reaching near your landmark in ${meta.area}.`;
-        const reply: Message = {
-          id: crypto.randomUUID(),
-          sender_id: 'other',
-          body: replyText,
-          created_at: new Date().toISOString(),
-        };
-        saveMessages([...updated, reply]);
-      }, 1800);
-    }, 600);
   }
+
+  // Perspective calculations:
+  // If activeRole === 'customer', the other party is the provider.
+  // If activeRole === 'provider', the other party is the customer.
+  const isViewingAsCustomer = activeRole === 'customer';
+  const otherPartyName = isViewingAsCustomer ? meta.proName : meta.customerName;
+  const otherPartyTrade = isViewingAsCustomer ? meta.proTrade : `Customer · ${meta.area}`;
+  const otherPartyInitials = isViewingAsCustomer ? meta.avatarInitials : meta.customerInitials;
+  const otherPartyPhoneLabel = isViewingAsCustomer ? 'Call Pro' : 'Call Customer';
+  const mySenderName = isViewingAsCustomer ? meta.customerName : meta.proName;
 
   return (
     <main className="flex h-screen flex-col bg-[#f5f8f5] dark:bg-[#080d09] text-ink dark:text-slate-100 transition-colors">
       {/* Top Header Bar */}
-      <header className="flex h-18 shrink-0 items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 shadow-xs">
-        <div className="flex items-center gap-3">
+      <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 shadow-xs">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={() => router.back()}
             aria-label="Back"
-            className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
           >
             <ArrowLeft size={18} />
           </button>
 
-          <div className="flex items-center gap-2.5">
-            <div className="relative">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative shrink-0">
               <span className="grid h-11 w-11 place-items-center rounded-full bg-emerald-600 text-white font-extrabold text-sm shadow-xs">
-                {meta.avatarInitials}
+                {otherPartyInitials}
               </span>
               <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
             </div>
 
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <b className="text-sm font-bold text-ink dark:text-white">{meta.proName}</b>
-                <BadgeCheck size={15} className="text-emerald-600" />
+                <b className="text-sm font-bold text-ink dark:text-white truncate">
+                  {otherPartyName}
+                </b>
+                <BadgeCheck size={15} className="text-emerald-600 shrink-0" />
               </div>
-              <small className="block text-[11px] text-slate-500 dark:text-slate-400">
-                {meta.proTrade} · #{bookingId}
+              <small className="block text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                {otherPartyTrade} · #{canonicalId}
               </small>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Quick Perspective Switcher Button for Demo/Testing */}
+          <button
+            onClick={() => {
+              const nextRole = activeRole === 'customer' ? 'provider' : 'customer';
+              setActiveRole(nextRole);
+              markChatSeen(canonicalId, nextRole);
+              toast.info(
+                `Switched view to ${
+                  nextRole === 'provider' ? `Provider (${meta.proName})` : `Customer (${meta.customerName})`
+                }`
+              );
+            }}
+            className="hidden sm:inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+            title="Switch sender perspective"
+          >
+            <ArrowLeftRight size={13} className="text-brand-600 dark:text-emerald-400" />
+            <span>Chatting as: {activeRole === 'provider' ? 'Provider' : 'Customer'}</span>
+          </button>
+
           <a
             href="tel:+923001234567"
             className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-xs"
           >
-            <Phone size={15} className="text-emerald-600" /> Call Pro
+            <Phone size={15} className="text-emerald-600" />
+            <span className="hidden sm:inline">{otherPartyPhoneLabel}</span>
           </a>
         </div>
       </header>
 
+      {/* Role Notice Pill on Mobile */}
+      <div className="sm:hidden flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/80 px-4 py-1.5 text-[11px] text-slate-600 dark:text-slate-300">
+        <span>
+          Sending as <b>{activeRole === 'provider' ? `Provider (${meta.proName})` : `Customer (${meta.customerName})`}</b>
+        </span>
+        <button
+          onClick={() => {
+            const nextRole = activeRole === 'customer' ? 'provider' : 'customer';
+            setActiveRole(nextRole);
+          }}
+          className="text-brand-700 dark:text-emerald-400 font-bold underline"
+        >
+          Switch to {activeRole === 'customer' ? 'Provider' : 'Customer'}
+        </button>
+      </div>
+
       {/* Message Feed */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5">
-        <div className="mx-auto max-w-[420px] rounded-2xl bg-white/80 dark:bg-slate-800/80 p-3 text-center text-[11px] text-slate-500 dark:text-slate-400 border border-slate-200/60 dark:border-slate-700/60 shadow-xs">
-          🔒 Messages and media are end-to-end encrypted for service order #{bookingId}.
+        <div className="mx-auto max-w-[420px] rounded-2xl bg-white/80 dark:bg-slate-800/80 p-3 text-center text-[11px] text-slate-500 dark:text-slate-400 border border-slate-200/60 dark:border-slate-700/60 shadow-xs flex items-center justify-center gap-1.5">
+          <ShieldCheck size={14} className="text-emerald-600" />
+          <span>Real-time verified chat synced between Customer & Service Provider.</span>
         </div>
 
         {items.map((m) => {
-          const isMe = m.sender_id === 'self';
+          // Message is on the right if sent by the current viewer
+          const isMe = m.sender_role === activeRole;
+          const senderInitial =
+            m.sender_role === 'provider' ? meta.avatarInitials : meta.customerInitials;
+
           return (
             <div
               key={m.id}
               className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}
             >
               {!isMe && (
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-emerald-100 dark:bg-emerald-950 font-bold text-[10px] text-emerald-900 dark:text-emerald-300">
-                  {meta.avatarInitials}
+                <span
+                  title={m.sender_name}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-emerald-100 dark:bg-emerald-950 font-bold text-[10px] text-emerald-900 dark:text-emerald-300 shadow-xs"
+                >
+                  {senderInitial}
                 </span>
               )}
 
@@ -307,6 +425,12 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
                     : 'rounded-bl-xs border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 text-ink dark:text-slate-100'
                 }`}
               >
+                {!isMe && (
+                  <small className="block text-[10px] font-bold text-emerald-700 dark:text-emerald-400 mb-1">
+                    {m.sender_name}
+                  </small>
+                )}
+
                 {m.images && m.images.length > 0 && (
                   <div className="mb-2 grid grid-cols-2 gap-1.5">
                     {m.images.map((img, i) => (
@@ -328,7 +452,10 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
                   }`}
                 >
                   <span>
-                    {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(m.created_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </span>
                   {isMe && <CheckCheck size={13} className="text-emerald-200" />}
                 </div>
@@ -337,14 +464,6 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
           );
         })}
 
-        {typing && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-100 font-bold text-[9px] text-emerald-900">
-              {meta.avatarInitials}
-            </span>
-            <span className="italic">{meta.proName} is typing…</span>
-          </div>
-        )}
         <div ref={tail} />
       </div>
 
@@ -352,7 +471,10 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
       {pendingImages.length > 0 && (
         <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 flex items-center gap-2">
           {pendingImages.map((src, i) => (
-            <div key={i} className="relative h-14 w-14 rounded-lg overflow-hidden border border-emerald-400">
+            <div
+              key={i}
+              className="relative h-14 w-14 rounded-lg overflow-hidden border border-emerald-400"
+            >
               <img src={src} alt="Pending" className="h-full w-full object-cover" />
               <button
                 type="button"
@@ -385,7 +507,11 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
         <input
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder={`Message ${meta.proName}...`}
+          placeholder={
+            activeRole === 'provider'
+              ? `Reply to ${meta.customerName} as ${mySenderName}...`
+              : `Message ${meta.proName} as ${mySenderName}...`
+          }
           className="h-11 flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 text-xs outline-none focus:border-emerald-500 dark:text-white"
         />
 

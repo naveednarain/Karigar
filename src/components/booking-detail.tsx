@@ -22,6 +22,9 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { RouteMap } from './map/route-map';
+import { getConversationUnreadCount, markChatSeen } from '@/lib/chat-unread';
+import { resolveCanonicalChatId } from '@/lib/chat-directory';
+import { getSyncedJobStatuses, setSyncedJobStatus } from '@/lib/sync';
 
 const sequence = ['requested', 'accepted', 'on_the_way', 'arrived', 'in_progress', 'completed'];
 const labels: Record<string, string> = {
@@ -38,7 +41,13 @@ const labels: Record<string, string> = {
 export function BookingDetail({ bookingId, role }: { bookingId: string; role: 'user' | 'provider' }) {
   const locale = useLocale();
   const router = useRouter();
-  const [status, setStatus] = useState<string>('on_the_way');
+  const [status, setStatus] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const live = getSyncedJobStatuses();
+      if (live[bookingId]) return live[bookingId];
+    }
+    return 'on_the_way';
+  });
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('The service was very prompt and the pipe repair is completely fixed. Excellent work!');
   const [showRatingModal, setShowRatingModal] = useState(false);
@@ -47,11 +56,38 @@ export function BookingDetail({ bookingId, role }: { bookingId: string; role: 'u
   const [complaint, setComplaint] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
   const isProvider = role === 'provider';
+
+  const chatTargetId = resolveCanonicalChatId(bookingId);
+
+  useEffect(() => {
+    const syncAll = () => {
+      setChatUnread(getConversationUnreadCount(chatTargetId, role === 'provider' ? 'provider' : 'customer'));
+      const live = getSyncedJobStatuses();
+      if (live[bookingId]) {
+        setStatus(live[bookingId]);
+      }
+    };
+    syncAll();
+    window.addEventListener('storage', syncAll);
+    window.addEventListener('karigar_messages_read', syncAll);
+    window.addEventListener('karigar_chat_updated', syncAll);
+    window.addEventListener('karigar_bookings_updated', syncAll);
+    window.addEventListener('focus', syncAll);
+    return () => {
+      window.removeEventListener('storage', syncAll);
+      window.removeEventListener('karigar_messages_read', syncAll);
+      window.removeEventListener('karigar_chat_updated', syncAll);
+      window.removeEventListener('karigar_bookings_updated', syncAll);
+      window.removeEventListener('focus', syncAll);
+    };
+  }, [chatTargetId, bookingId, role]);
 
   async function updateStatus(next: string) {
     setBusy(true);
     setStatus(next);
+    setSyncedJobStatus(bookingId, next);
     toast.success(`Booking status: ${labels[next] || next}`);
     setBusy(false);
     if (next === 'completed' && !isProvider) {
@@ -242,20 +278,19 @@ export function BookingDetail({ bookingId, role }: { bookingId: string; role: 'u
                   <Phone size={15} /> Call
                 </a>
                 <Link
-                  href={`/${locale}/chat/${bookingId}`}
+                  href={`/${locale}/chat/${chatTargetId}`}
                   onClick={() => {
-                    try {
-                      const r = JSON.parse(localStorage.getItem('karigar_read_conversations') || '[]');
-                      if (!r.includes(bookingId)) {
-                        r.push(bookingId);
-                        localStorage.setItem('karigar_read_conversations', JSON.stringify(r));
-                        window.dispatchEvent(new Event('karigar_messages_read'));
-                      }
-                    } catch {}
+                    markChatSeen(chatTargetId, role === 'provider' ? 'provider' : 'customer');
+                    setChatUnread(0);
                   }}
-                  className="flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
+                  className="relative flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition"
                 >
                   <MessageCircle size={15} /> Message
+                  {chatUnread > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1.5 place-items-center rounded-full bg-rose-500 text-[10px] font-extrabold text-white ring-2 ring-white shadow-xs">
+                      {chatUnread}
+                    </span>
+                  )}
                 </Link>
               </div>
             </article>
