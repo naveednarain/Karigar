@@ -181,7 +181,7 @@ export default async function ProviderProfile({ params }: { params: { locale: st
                     </Link>
 
                     <Link
-                      href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill })}`}
+                      href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill, client: authUser?.name })}`}
                       className="flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
                     >
                       <MessageCircle size={15} className="text-emerald-600" />
@@ -218,7 +218,7 @@ export default async function ProviderProfile({ params }: { params: { locale: st
             ) : (
               <>
                 <Link
-                  href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill })}`}
+                  href={`/${params.locale}/chat/${resolveCanonicalChatId(pro.id, { providerName: pro.name, category: pro.skill, client: authUser?.name })}`}
                   className="grid h-11 w-11 place-items-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 shrink-0"
                   title={`Chat with ${pro.name}`}
                 >

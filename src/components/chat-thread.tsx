@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useLocale } from 'next-intl';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState, FormEvent, ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from 'react';
 import {
   ArrowLeft,
   CheckCheck,
@@ -17,7 +17,12 @@ import {
 import { toast } from 'sonner';
 import { jobs } from '@/lib/data';
 import { markChatSeen } from '@/lib/chat-unread';
-import { resolveCanonicalChatId } from '@/lib/chat-directory';
+import {
+  resolveCanonicalChatId,
+  getConversationMeta,
+  registerConversationMeta,
+  isNameMatch,
+} from '@/lib/chat-directory';
 
 export type ChatMessage = {
   id: string;
@@ -155,40 +160,46 @@ function normalizeMessage(m: any): ChatMessage {
   };
 }
 
-export function ChatThread({ bookingId }: { bookingId: string }) {
+export function ChatThread({
+  bookingId,
+  initialUser,
+}: {
+  bookingId: string;
+  initialUser?: { id?: string; name?: string; role?: string } | null;
+}) {
   const locale = useLocale();
   const router = useRouter();
 
   // Resolve to canonical conversation ID so that ongoing chats continue seamlessly
   const canonicalId = resolveCanonicalChatId(bookingId);
-  const foundJob = jobs.find((j) => j.id === bookingId || j.bookingId === bookingId || j.id === canonicalId);
-  const meta = bookingDirectory[canonicalId] || bookingDirectory[bookingId] || {
-    proName: 'Ahsan Ali',
-    proTrade: foundJob ? foundJob.category : 'Service Professional',
-    customerName: foundJob ? foundJob.client : 'Customer',
-    service: foundJob ? foundJob.type : 'Home Service',
-    area: foundJob ? foundJob.area : 'Hyderabad',
-    avatarInitials: 'AA',
-    customerInitials: foundJob ? foundJob.client.slice(0, 2).toUpperCase() : 'CU',
-    defaultMessages: [
-      {
-        id: 'def-1',
-        sender_role: 'provider' as const,
-        sender_name: 'Ahsan Ali',
-        body: `Hello! I have received your service request #${bookingId}. How can I assist you?`,
-        created_at: new Date().toISOString(),
-      },
-    ],
-  };
 
-  const storageKey = `karigar_chat_${canonicalId}`;
-  const [items, setItems] = useState<ChatMessage[]>([]);
-  const [body, setBody] = useState('');
-  const [pendingImages, setPendingImages] = useState<string[]>([]);
-  const tail = useRef<HTMLDivElement>(null);
+  // Synchronously initialize currentUser and activeRole to prevent any 1st-render visual flicker
+  const [currentUser, setCurrentUser] = useState<{ id?: string; name?: string; role?: string } | null>(() => {
+    if (initialUser) return initialUser;
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('karigar_cached_user');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return null;
+  });
 
-  // Active user and perspective role
-  const [activeRole, setActiveRole] = useState<'customer' | 'provider'>('customer');
+  const [activeRole, setActiveRole] = useState<'customer' | 'provider'>(() => {
+    if (initialUser?.role === 'provider') return 'provider';
+    if (initialUser?.role === 'user') return 'customer';
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('karigar_cached_user');
+        if (cached) {
+          const u = JSON.parse(cached);
+          if (u?.role === 'provider') return 'provider';
+          if (u?.role === 'user') return 'customer';
+        }
+      } catch {}
+    }
+    return 'customer';
+  });
 
   useEffect(() => {
     // Detect current authenticated persona from /api/auth/me
@@ -196,6 +207,10 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.user) {
+          setCurrentUser(d.user);
+          try {
+            localStorage.setItem('karigar_cached_user', JSON.stringify(d.user));
+          } catch {}
           const role = d.user.role === 'provider' ? 'provider' : 'customer';
           setActiveRole(role);
           markChatSeen(canonicalId, role);
@@ -203,6 +218,17 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
       })
       .catch(() => {});
   }, [canonicalId]);
+
+  // Dynamically resolve metadata for the exact provider and customer
+  const meta = useMemo(() => {
+    return getConversationMeta(canonicalId, currentUser?.name, activeRole);
+  }, [canonicalId, currentUser?.name, activeRole]);
+
+  const storageKey = `karigar_chat_${canonicalId}`;
+  const [items, setItems] = useState<ChatMessage[]>([]);
+  const [body, setBody] = useState('');
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const tail = useRef<HTMLDivElement>(null);
 
   // Load chat messages from localStorage on mount & listen for real-time cross-tab sync
   useEffect(() => {
@@ -283,7 +309,10 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
     const text = body.trim();
     if (!text && pendingImages.length === 0) return;
 
-    const senderName = activeRole === 'provider' ? meta.proName : meta.customerName;
+    const senderName =
+      activeRole === 'provider'
+        ? (currentUser?.name || meta.proName)
+        : (currentUser?.name || meta.customerName);
 
     const newMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -296,14 +325,34 @@ export function ChatThread({ bookingId }: { bookingId: string }) {
 
     const updated = [...items, newMessage];
     saveMessages(updated);
+
+    // Register conversation metadata with exact sender persona
+    registerConversationMeta({
+      bookingId: canonicalId,
+      providerName: activeRole === 'provider' ? senderName : meta.proName,
+      providerTrade: meta.proTrade,
+      customerName: activeRole === 'customer' ? senderName : meta.customerName,
+      customerArea: meta.area,
+      service: meta.service,
+      defaultMessage: newMessage.body,
+      defaultTime: 'Just now',
+    });
+
     setBody('');
     setPendingImages([]);
   }
 
   // Perspective calculations:
-  // If activeRole === 'customer', the other party is the provider.
-  // If activeRole === 'provider', the other party is the customer.
-  const isViewingAsCustomer = activeRole === 'customer';
+  // Strictly prevent own-name visual flicker: if currentUser is the provider, viewer is provider!
+  // If currentUser is the customer, viewer is customer!
+  const isViewingAsCustomer = useMemo(() => {
+    if (currentUser?.name) {
+      if (isNameMatch(currentUser.name, meta.proName)) return false;
+      if (isNameMatch(currentUser.name, meta.customerName)) return true;
+    }
+    return activeRole === 'customer';
+  }, [currentUser?.name, meta.proName, meta.customerName, activeRole]);
+
   const otherPartyName = isViewingAsCustomer ? meta.proName : meta.customerName;
   const otherPartyTrade = isViewingAsCustomer ? meta.proTrade : `Customer · ${meta.area}`;
   const otherPartyInitials = isViewingAsCustomer ? meta.avatarInitials : meta.customerInitials;

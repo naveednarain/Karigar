@@ -67,7 +67,7 @@ import {
   markChatSeen,
   markAllChatsSeen,
 } from '@/lib/chat-unread';
-import { resolveCanonicalChatId } from '@/lib/chat-directory';
+import { resolveCanonicalChatId, getConversationsForUser } from '@/lib/chat-directory';
 import {
   getAllSyncedBookings,
   setSyncedJobStatus,
@@ -295,39 +295,21 @@ export function Workspace({
     },
   ]);
 
-  // Dynamic Messages data with persistent read state & real latest message inspection
-  const messagesList = useMemo(() => {
-    const rawList = [
-      {
-        bookingId: 'KRG-2081',
-        name: role === 'provider' ? 'Sana Ahmed' : 'Ahsan Ali',
-        roleSubtitle: role === 'provider' ? 'Customer · Latifabad Unit 7' : 'Master Plumber · 4.9 ★',
-        defaultMessage: 'I will be waiting outside in front of my house. Thank you!',
-        defaultTime: '16:01',
-        online: true,
-        initials: role === 'provider' ? 'SA' : 'AA',
-      },
-      {
-        bookingId: 'KRG-2083',
-        name: role === 'provider' ? 'Bilal Hussain' : 'Imran Memon',
-        roleSubtitle: role === 'provider' ? 'Customer · Qasimabad' : 'AC & Electrical · 4.8 ★',
-        defaultMessage: 'Tomorrow at 10:00 AM works well for the AC inspection.',
-        defaultTime: 'Yesterday',
-        online: false,
-        initials: role === 'provider' ? 'BH' : 'IM',
-      },
-      {
-        bookingId: 'KRG-2082',
-        name: role === 'provider' ? 'Mariam Shah' : 'Nadeem Baloch',
-        roleSubtitle: role === 'provider' ? 'Customer · Jamshoro' : 'Master Carpenter · 5.0 ★',
-        defaultMessage: 'Work is finished and verified. Everything looks great.',
-        defaultTime: 'Nov 15',
-        online: false,
-        initials: role === 'provider' ? 'MS' : 'NB',
-      },
-    ];
+  const isProvider = role === 'provider';
+  const isAdmin = role === 'admin';
+  const isCustomer = role === 'customer';
 
-    return rawList.map((m) => {
+  // Dynamic Messages data with persistent read state & real latest message inspection
+  // Strictly isolated: Providers only see their assigned customers; Customers only see their hired providers
+  const messagesList = useMemo(() => {
+    const userRole = isProvider ? 'provider' : isAdmin ? 'admin' : 'customer';
+    const convs = getConversationsForUser(userRole, displayName);
+
+    return convs.map((m) => {
+      const isProv = isProvider;
+      let otherName = isProv ? m.customerName : m.providerName;
+      let otherSubtitle = isProv ? `Customer · ${m.customerArea}` : m.providerTrade;
+
       let lastMsg = m.defaultMessage;
       let time = m.defaultTime;
       if (typeof window !== 'undefined') {
@@ -342,31 +324,53 @@ export function Workspace({
                 const d = new Date(last.created_at);
                 time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               }
+
+              // Dynamically extract real participant names from actual conversation history
+              if (isProv) {
+                const custMsg = [...parsed].reverse().find((x) => x.sender_role === 'customer' && x.sender_name);
+                if (custMsg?.sender_name) {
+                  otherName = custMsg.sender_name;
+                }
+              } else {
+                const proMsg = [...parsed].reverse().find((x) => x.sender_role === 'provider' && x.sender_name);
+                if (proMsg?.sender_name) {
+                  otherName = proMsg.sender_name;
+                }
+              }
             }
           }
         } catch {}
       }
+
+      const initials =
+        otherName
+          .split(' ')
+          .map((s: string) => s[0])
+          .slice(0, 2)
+          .join('')
+          .toUpperCase() || (isProv ? 'CU' : 'PR');
+
       const unreadCount = getConversationUnreadCount(
         m.bookingId,
-        role === 'provider' ? 'provider' : 'customer'
+        isProvider ? 'provider' : 'customer'
       );
       return {
-        ...m,
+        bookingId: m.bookingId,
+        name: otherName,
+        roleSubtitle: otherSubtitle,
         lastMessage: lastMsg,
         time,
         unread: unreadCount,
+        initials,
+        online: Boolean(m.online),
       };
     });
-  }, [role, isMounted, unreadTrigger]);
+  }, [isProvider, isAdmin, displayName, isMounted, unreadTrigger]);
 
   const totalUnreadMessages = useMemo(() => {
     if (!isMounted) return 0;
     return messagesList.reduce((acc, m) => acc + (m.unread || 0), 0);
   }, [messagesList, isMounted]);
-
-  const isProvider = role === 'provider';
-  const isAdmin = role === 'admin';
-  const isCustomer = role === 'customer';
 
   // Navigation Items
   const nav = isAdmin
@@ -1445,42 +1449,56 @@ export function Workspace({
                 </div>
               </div>
 
-              <div className="space-y-3">
-                {messagesList.map((m) => (
-                  <Link
-                    key={m.bookingId}
-                    href={`/${locale}/chat/${m.bookingId}`}
-                    onClick={() => markConversationRead(m.bookingId)}
-                    className="flex items-center gap-4 rounded-[22px] border border-slate-100 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:border-emerald-300"
-                  >
-                    <div className="relative">
-                      <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 font-bold text-emerald-900 text-sm">
-                        {m.initials}
-                      </span>
-                      {m.online && (
-                        <span className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
-                      )}
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <b className="truncate text-sm font-bold text-ink">{m.name}</b>
-                        <small className="text-[11px] text-slate-400 font-semibold">{m.time}</small>
+              {messagesList.length === 0 ? (
+                <div className="rounded-[24px] border border-slate-200/80 bg-white p-8 text-center shadow-soft dark:bg-[#111a14] dark:border-slate-800">
+                  <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300">
+                    <MessageCircle size={26} />
+                  </div>
+                  <h3 className="mt-4 text-base font-extrabold text-ink dark:text-white">No conversations yet</h3>
+                  <p className="mt-1.5 text-xs text-slate-500 max-w-[420px] mx-auto leading-relaxed">
+                    {isProvider
+                      ? `Repair requests and direct customer inquiries assigned to ${displayName} will appear here.`
+                      : 'Direct conversations with local professionals you contact or book will appear here.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {messagesList.map((m) => (
+                    <Link
+                      key={m.bookingId}
+                      href={`/${locale}/chat/${m.bookingId}`}
+                      onClick={() => markConversationRead(m.bookingId)}
+                      className="flex items-center gap-4 rounded-[22px] border border-slate-100 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:border-emerald-300"
+                    >
+                      <div className="relative">
+                        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-100 font-bold text-emerald-900 text-sm">
+                          {m.initials}
+                        </span>
+                        {m.online && (
+                          <span className="absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
+                        )}
                       </div>
-                      <small className="block text-[11px] text-slate-400 truncate">{m.roleSubtitle}</small>
-                      <p className="mt-1 text-xs text-slate-600 truncate">{m.lastMessage}</p>
-                    </div>
 
-                    {m.unread > 0 ? (
-                      <span className="grid h-6 min-w-6 px-1.5 place-items-center rounded-full bg-rose-500 text-[11px] font-extrabold text-white shadow-xs">
-                        {m.unread}
-                      </span>
-                    ) : (
-                      <ChevronRight size={18} className="text-slate-300" />
-                    )}
-                  </Link>
-                ))}
-              </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <b className="truncate text-sm font-bold text-ink">{m.name}</b>
+                          <small className="text-[11px] text-slate-400 font-semibold">{m.time}</small>
+                        </div>
+                        <small className="block text-[11px] text-slate-400 truncate">{m.roleSubtitle}</small>
+                        <p className="mt-1 text-xs text-slate-600 truncate">{m.lastMessage}</p>
+                      </div>
+
+                      {m.unread > 0 ? (
+                        <span className="grid h-6 min-w-6 px-1.5 place-items-center rounded-full bg-rose-500 text-[11px] font-extrabold text-white shadow-xs">
+                          {m.unread}
+                        </span>
+                      ) : (
+                        <ChevronRight size={18} className="text-slate-300" />
+                      )}
+                    </Link>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

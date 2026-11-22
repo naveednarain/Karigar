@@ -45,7 +45,10 @@ export function SiteHeader({ showBack = false, backUrl, title }: { showBack?: bo
       return;
     }
     const updateCount = () => {
-      const c = getTotalUnreadCount(currentUser.role === 'provider' ? 'provider' : 'customer');
+      const c = getTotalUnreadCount(
+        currentUser.role === 'provider' ? 'provider' : 'customer',
+        currentUser.name
+      );
       setUnreadCount(c);
     };
     updateCount();

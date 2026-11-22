@@ -1,3 +1,5 @@
+import { getConversationIdsForUser } from './chat-directory';
+
 export type ChatRole = 'customer' | 'provider';
 
 export interface ChatMessageSummary {
@@ -201,14 +203,23 @@ export function getConversationUnreadCount(
 
 /**
  * Calculate total unread count across all tracked conversations for a role.
+ * Strictly calculates based on the specific user's isolated conversations.
  */
 export function getTotalUnreadCount(
   role: ChatRole,
-  bookingIds: string[] = ['KRG-2081', 'KRG-2083', 'KRG-2082']
+  userNameOrBookingIds?: string | string[]
 ): number {
   if (typeof window === 'undefined') return 0;
+  let targetIds: string[];
+  if (Array.isArray(userNameOrBookingIds)) {
+    targetIds = userNameOrBookingIds;
+  } else if (typeof userNameOrBookingIds === 'string' && userNameOrBookingIds.trim().length > 0) {
+    targetIds = getConversationIdsForUser(role, userNameOrBookingIds);
+  } else {
+    targetIds = getConversationIdsForUser(role);
+  }
   let total = 0;
-  for (const id of bookingIds) {
+  for (const id of targetIds) {
     total += getConversationUnreadCount(id, role);
   }
   return total;

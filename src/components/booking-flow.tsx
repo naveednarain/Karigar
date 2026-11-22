@@ -111,6 +111,20 @@ export function BookingFlow({ provider, locale }: { provider: RankedProvider; lo
         localStorage.setItem('karigar_user_bookings', JSON.stringify([newJob, ...existing]));
       }
 
+      try {
+        const { registerConversationMeta } = await import('@/lib/chat-directory');
+        registerConversationMeta({
+          bookingId: newBookingId,
+          providerName: provider.name,
+          providerTrade: provider.skill,
+          customerName: clientName,
+          customerArea: data.area,
+          service: newJob.type,
+          defaultMessage: `New booking request #${newBookingId} placed for ${newJob.type}.`,
+          defaultTime: 'Just now',
+        });
+      } catch {}
+
       setDone(true);
       toast.success('Your repair request has been sent to ' + provider.name);
     } catch (error) {
