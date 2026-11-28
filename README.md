@@ -4,10 +4,12 @@
 
 ---
 
-## 🌟 Key Features
+## 🌟 Key Features of Queue Flow
 
 ### 👤 Customer Experience
+
 - **AI-Powered Natural Language Search**: Describe any repair problem in English, Urdu, or Roman Urdu (e.g., *"kitchen pipe leaking under sink in Latifabad"* or *"AC capacitor change in Qasimabad"*) to get instant category matching, visit fee estimates, and recommended local artisans.
+
 - **3-Step Frictionless Booking**: Choose service details, set visit time/urgency, and provide landmark address with immediate order dispatch (`/book/[providerId]`).
 - **Live Order Tracking**: Real-time progress through every service milestone (*Request Sent* &rarr; *Accepted* &rarr; *On the way* &rarr; *Arrived* &rarr; *In progress* &rarr; *Completed*).
 - **Per-Booking Dynamic Chat**: End-to-end encrypted messaging threads (`/chat/[bookingId]`) with persistent local storage, photo attachments, contextual auto-replies, and automatic unread badge counter resets.
